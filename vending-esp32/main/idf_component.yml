@@ -1,0 +1,9 @@
+dependencies:
+  espressif/mqtt:
+    version: "*"
+  espressif/led_strip:
+    version: "*"
+  espressif/cjson:
+    version: "*"
+  idf:
+    version: ">=5.0.0"

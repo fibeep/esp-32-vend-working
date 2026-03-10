@@ -485,7 +485,7 @@ void vTaskMdbEvent(void *pvParameters)
                         uint8_t payload[19];
                         xorEncodeWithPasskey(0x21, cashItemPrice, cashItemNumber, 0, (uint8_t *)&payload);
 
-                        char topic[64];
+                        char topic[128];
                         snprintf(topic, sizeof(topic), "domain.panamavendingmachines.com/%s/sale", my_subdomain);
 
                         esp_mqtt_client_publish(mqttClient, topic, (char *)&payload, sizeof(payload), 1, 0);

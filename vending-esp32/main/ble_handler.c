@@ -39,7 +39,7 @@ void ble_pax_event_handler(uint16_t devices_count)
     uint8_t payload[19];
     xorEncodeWithPasskey(0x22, 0, 0, devices_count, (uint8_t *)&payload);
 
-    char topic[64];
+    char topic[128];
     snprintf(topic, sizeof(topic), "domain.panamavendingmachines.com/%s/paxcounter", my_subdomain);
 
     esp_mqtt_client_publish(mqttClient, topic, (char *)&payload, sizeof(payload), 1, 0);

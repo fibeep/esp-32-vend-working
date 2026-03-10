@@ -537,7 +537,7 @@ void requestTelemetryData(void *arg)
     uint8_t *dex = (uint8_t *)xRingbufferReceive(dexRingbuf, &dex_size, 0);
 
     /* Publish to MQTT */
-    char topic[64];
+    char topic[128];
     snprintf(topic, sizeof(topic), "domain.panamavendingmachines.com/%s/dex", my_subdomain);
 
     esp_mqtt_client_publish(mqttClient, topic, (char *)dex, dex_size, 0, 0);

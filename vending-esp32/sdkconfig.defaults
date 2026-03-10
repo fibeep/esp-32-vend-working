@@ -8,6 +8,9 @@
 # Target: ESP32-S3
 CONFIG_IDF_TARGET="esp32s3"
 
+# Flash size: 16MB (ESP32-S3-N16R8)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
 # Partition table: two OTA (large) for future OTA updates
 CONFIG_PARTITION_TABLE_TWO_OTA_LARGE=y
 

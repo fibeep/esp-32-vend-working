@@ -68,11 +68,11 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base,
          * Connected to the broker.  Subscribe to the wildcard topic
          * for this device and publish our online status.
          */
-        char topic[64];
+        char topic[128];
         snprintf(topic, sizeof(topic), "%s.panamavendingmachines.com/#", my_subdomain);
         esp_mqtt_client_subscribe(client, topic, 0);
 
-        char topic_status[64];
+        char topic_status[128];
         snprintf(topic_status, sizeof(topic_status),
                  "domain.panamavendingmachines.com/%s/status", my_subdomain);
         esp_mqtt_client_publish(client, topic_status, "online", 0, 1, 1);

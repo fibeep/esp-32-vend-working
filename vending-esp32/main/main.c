@@ -360,7 +360,7 @@ void app_main(void)
      *   CONFIG_MQTT_USERNAME    = "vmflow"
      *   CONFIG_MQTT_PASSWORD    = "vmflow"
      */
-    char mqtt_uri[128];
+    char mqtt_uri[300];
     char mqtt_user[64];
     char mqtt_pass[64];
 
@@ -392,7 +392,7 @@ void app_main(void)
     /* Also check the "vmflow" namespace for legacy mqtt key */
     nvs_handle_t nvs_vmflow_mqtt;
     if (nvs_open("vmflow", NVS_READONLY, &nvs_vmflow_mqtt) == ESP_OK) {
-        char legacy_mqtt[128] = {0};
+        char legacy_mqtt[256] = {0};
         size_t len = sizeof(legacy_mqtt);
         if (nvs_get_str(nvs_vmflow_mqtt, "mqtt", legacy_mqtt, &len) == ESP_OK) {
             if (strlen(legacy_mqtt) > 0) {
@@ -416,7 +416,7 @@ void app_main(void)
     ESP_LOGI(TAG, "MQTT User: %s", mqtt_user);
 
     /* Build LWT (Last Will and Testament) topic */
-    char lwt_topic[64];
+    char lwt_topic[128];
     snprintf(lwt_topic, sizeof(lwt_topic), "domain.panamavendingmachines.com/%s/status", my_subdomain);
 
     /*
