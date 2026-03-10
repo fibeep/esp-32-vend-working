@@ -1,5 +1,6 @@
 package xyz.vmflow.vending.data.repository
 
+import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
@@ -28,6 +29,9 @@ class DeviceRepository(
     private val httpClient: HttpClient,
     private val authRepository: AuthRepository
 ) {
+    companion object {
+        private const val TAG = "DeviceRepository"
+    }
 
     /**
      * Fetches all devices owned by the authenticated user.
@@ -72,7 +76,10 @@ class DeviceRepository(
     suspend fun registerDevice(macAddress: String): Result<Device> {
         return executeWithRetry {
             val token = authRepository.getAccessToken()
-                ?: return@executeWithRetry Result.failure(Exception("Not authenticated"))
+            Log.d(TAG, "registerDevice: token present=${token != null}, length=${token?.length ?: 0}, first20=${token?.take(20) ?: "null"}")
+            if (token == null) {
+                return@executeWithRetry Result.failure(Exception("Not authenticated"))
+            }
 
             val response = httpClient.post("${ApiConstants.SUPABASE_URL}/rest/v1/embedded") {
                 header("apikey", ApiConstants.SUPABASE_ANON_KEY)
@@ -81,14 +88,18 @@ class DeviceRepository(
                 setBody(RegisterDeviceRequest(macAddress = macAddress))
             }
 
+            Log.d(TAG, "registerDevice: response status=${response.status}")
             if (response.status.isSuccess()) {
                 val devices: List<Device> = response.body()
+                Log.d(TAG, "registerDevice: got ${devices.size} devices in response")
                 if (devices.isNotEmpty()) {
                     Result.success(devices.first())
                 } else {
                     Result.failure(Exception("Empty response from device registration"))
                 }
             } else {
+                val errorBody = try { response.body<String>() } catch (_: Exception) { "unable to read" }
+                Log.e(TAG, "registerDevice: failed with ${response.status}, body=$errorBody")
                 Result.failure(Exception("Failed to register device: ${response.status}"))
             }
         }
@@ -104,16 +115,31 @@ class DeviceRepository(
      * @return The result from the API call.
      */
     private suspend fun <T> executeWithRetry(block: suspend () -> Result<T>): Result<T> {
-        val result = block()
+        val result = try {
+            block()
+        } catch (e: Exception) {
+            Log.e(TAG, "executeWithRetry: block threw exception: ${e.message}")
+            Result.failure(e)
+        }
         if (result.isFailure) {
             val exception = result.exceptionOrNull()
+            Log.d(TAG, "executeWithRetry: initial call failed: ${exception?.message}")
             if (exception?.message?.contains("401") == true ||
                 exception?.message?.contains("Not authenticated") == true
             ) {
-                // Attempt token refresh
+                Log.d(TAG, "executeWithRetry: detected 401, attempting token refresh...")
                 val refreshResult = authRepository.refreshToken()
+                Log.d(TAG, "executeWithRetry: refresh result: success=${refreshResult.isSuccess}, error=${refreshResult.exceptionOrNull()?.message}")
                 if (refreshResult.isSuccess) {
-                    return block() // Retry with new token
+                    Log.d(TAG, "executeWithRetry: retrying with new token...")
+                    return try {
+                        block()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "executeWithRetry: retry also failed: ${e.message}")
+                        Result.failure(e)
+                    }
+                } else {
+                    Log.e(TAG, "executeWithRetry: token refresh failed, returning original error")
                 }
             }
         }

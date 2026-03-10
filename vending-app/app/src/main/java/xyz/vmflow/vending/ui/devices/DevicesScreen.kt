@@ -148,9 +148,10 @@ fun DevicesScreen(
             if (uiState.showProvisionDialog) {
                 ProvisionDialog(
                     isLoading = uiState.provisioningInProgress,
+                    error = uiState.error,
                     onDismiss = viewModel::hideProvisionDialog,
-                    onProvision = { macAddress ->
-                        viewModel.registerDevice(macAddress)
+                    onProvision = { bleDevice ->
+                        viewModel.provisionDevice(bleDevice)
                     }
                 )
             }

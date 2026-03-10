@@ -67,13 +67,21 @@ class SalesRepository(
      * @return The result from the API call.
      */
     private suspend fun <T> executeWithRetry(block: suspend () -> Result<T>): Result<T> {
-        val result = block()
+        val result = try {
+            block()
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
         if (result.isFailure) {
             val exception = result.exceptionOrNull()
             if (exception?.message?.contains("401") == true) {
                 val refreshResult = authRepository.refreshToken()
                 if (refreshResult.isSuccess) {
-                    return block()
+                    return try {
+                        block()
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
                 }
             }
         }

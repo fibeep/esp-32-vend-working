@@ -46,13 +46,14 @@ import xyz.vmflow.vending.bluetooth.BleManager
  *
  * @param isLoading Whether a provisioning operation is in progress.
  * @param onDismiss Callback when the dialog is dismissed.
- * @param onProvision Callback with the selected device's MAC address.
+ * @param onProvision Callback with the selected BLE device for provisioning.
  */
 @Composable
 fun ProvisionDialog(
     isLoading: Boolean,
+    error: String? = null,
     onDismiss: () -> Unit,
-    onProvision: (macAddress: String) -> Unit
+    onProvision: (device: BleDevice) -> Unit
 ) {
     val unconfiguredDevices = remember { mutableStateListOf<BleDevice>() }
     var isScanning by remember { mutableStateOf(true) }
@@ -90,6 +91,43 @@ fun ProvisionDialog(
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(16.dp))
                     Text("Registering device...")
+                } else if (error != null) {
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Tap a device to retry:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyColumn {
+                        items(unconfiguredDevices) { device ->
+                            Card(
+                                onClick = { onProvision(device) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp)
+                                ) {
+                                    Text(
+                                        text = device.name,
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = device.address,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                 } else if (isScanning && unconfiguredDevices.isEmpty()) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(16.dp))
@@ -112,7 +150,7 @@ fun ProvisionDialog(
                     LazyColumn {
                         items(unconfiguredDevices) { device ->
                             Card(
-                                onClick = { onProvision(device.address) },
+                                onClick = { onProvision(device) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),

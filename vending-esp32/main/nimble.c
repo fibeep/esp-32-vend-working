@@ -38,9 +38,11 @@ uint16_t conn_handle;
 static bool ble_initialized = false;
 static TaskHandle_t ble_host_task_handle = NULL;
 
-// UUIDs
-static const ble_uuid128_t gatt_svr_svc_uuid = BLE_UUID128_INIT(0x02, 0x00, 0x12, 0xac, 0x42, 0x02, 0x78, 0xb8, 0xed, 0x11, 0xda, 0x46, 0x42, 0xc6, 0xbb, 0xb2);
-static const ble_uuid128_t gatt_svr_chr_uuid = BLE_UUID128_INIT(0x02, 0x00, 0x12, 0xac, 0x42, 0x02, 0x78, 0xb8, 0xed, 0x11, 0xde, 0x46, 0x76, 0x9c, 0xaf, 0xc9);
+// UUIDs (NimBLE BLE_UUID128_INIT takes bytes in little-endian / reversed order)
+// Service UUID: 020012ac-4202-78b8-ed11-da4642c6bbb2
+static const ble_uuid128_t gatt_svr_svc_uuid = BLE_UUID128_INIT(0xb2, 0xbb, 0xc6, 0x42, 0x46, 0xda, 0x11, 0xed, 0xb8, 0x78, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02);
+// Characteristic UUID: 020012ac-4202-78b8-ed11-de46769cafc9
+static const ble_uuid128_t gatt_svr_chr_uuid = BLE_UUID128_INIT(0xc9, 0xaf, 0x9c, 0x76, 0x46, 0xde, 0x11, 0xed, 0xb8, 0x78, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02);
 
 // Buffer para dados da característica
 char characteristic_tosend_value[50] = "I am characteristic value";
@@ -116,20 +118,41 @@ void ble_host_task(void *param) {
 static void ble_adv_start(void) {
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields;
+    struct ble_hs_adv_fields rsp_fields;
     const char *name;
-
-    memset(&fields, 0, sizeof(fields));
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.tx_pwr_lvl_is_present = 1;
-    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    int rc;
 
     name = ble_svc_gap_device_name();
-    fields.name = (uint8_t*)name;
-    fields.name_len = strlen(name);
-    fields.name_is_complete = 1;
 
-    int rc = ble_gap_adv_set_fields(&fields);
+    /*
+     * BLE 4.x legacy advertising has a 31-byte payload limit.
+     * Our device names (e.g. "123456.panamavendingmachines.com") are too
+     * long to fit alongside the flags and TX power fields.
+     *
+     * Solution: put flags in the advertising data, and the complete
+     * device name in the scan response data.  Active scanners (which
+     * Android uses by default) will receive both.
+     */
+
+    /* Advertising data: flags only */
+    memset(&fields, 0, sizeof(fields));
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+
+    rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
+        return;
+    }
+
+    /* Scan response data: complete device name */
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+    rsp_fields.name = (uint8_t *)name;
+    rsp_fields.name_len = strlen(name);
+    rsp_fields.name_is_complete = 1;
+
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed: %d", rc);
         return;
     }
 
