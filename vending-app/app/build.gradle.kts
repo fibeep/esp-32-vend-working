@@ -98,6 +98,9 @@ dependencies {
     implementation(libs.supabase.gotrue)
     implementation(libs.supabase.postgrest)
 
+    // QR Code Generation (ZXing)
+    implementation(libs.zxing.core)
+
     // Kotlin Serialization
     implementation(libs.kotlinx.serialization.json)
 

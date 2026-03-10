@@ -10,6 +10,7 @@ import xyz.vmflow.vending.data.repository.AuthRepository
 import xyz.vmflow.vending.data.repository.DeviceRepository
 import xyz.vmflow.vending.data.repository.SalesRepository
 import xyz.vmflow.vending.data.repository.VendingRepository
+import xyz.vmflow.vending.data.repository.YappyRepository
 import xyz.vmflow.vending.domain.payment.MockPaymentProvider
 import xyz.vmflow.vending.domain.payment.PaymentProvider
 import xyz.vmflow.vending.ui.auth.LoginViewModel
@@ -68,6 +69,9 @@ val appModule = module {
     /** Vending credit request repository for the BLE payment flow */
     single { VendingRepository(httpClient = get(), authRepository = get()) }
 
+    /** Yappy payment repository for QR-based Yappy payments */
+    single { YappyRepository(httpClient = get(), authRepository = get()) }
+
     // ── Domain ─────────────────────────────────────────────────────────────────
 
     /**
@@ -85,7 +89,7 @@ val appModule = module {
     viewModel { RegisterViewModel(authRepository = get()) }
 
     /** Vending flow ViewModel (the core state machine) */
-    viewModel { VendingViewModel(vendingRepository = get(), deviceRepository = get(), paymentProvider = get()) }
+    viewModel { VendingViewModel(vendingRepository = get(), deviceRepository = get(), paymentProvider = get(), yappyRepository = get()) }
 
     /** Device management screen ViewModel */
     viewModel { DevicesViewModel(deviceRepository = get()) }

@@ -18,8 +18,10 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -32,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
@@ -91,6 +94,7 @@ fun VendingScreen(
                 price = currentState.price,
                 itemNumber = currentState.itemNumber,
                 onSend = viewModel::approveVend,
+                onYappy = viewModel::approveVendWithYappy,
                 onCancel = viewModel::cancelVend
             )
 
@@ -99,10 +103,20 @@ fun VendingScreen(
                 itemNumber = currentState.itemNumber
             )
 
+            is VendingState.YappyPayment -> YappyPaymentContent(
+                price = currentState.price,
+                itemNumber = currentState.itemNumber,
+                qrHash = currentState.qrHash,
+                statusMessage = currentState.statusMessage,
+                onCancel = viewModel::cancelYappyPayment
+            )
+
             is VendingState.Dispensing -> DispensingContent()
 
             is VendingState.Success -> SuccessContent(
                 itemNumber = currentState.itemNumber,
+                message = currentState.message,
+                subtitle = currentState.subtitle,
                 onDone = viewModel::resetToIdle
             )
 
@@ -332,12 +346,13 @@ private fun WaitingContent() {
     }
 }
 
-/** Vend request received: Shows product info and Send/Cancel buttons */
+/** Vend request received: Shows product info with Send Payment, Pay with Yappy, and Cancel buttons */
 @Composable
 private fun VendRequestReceivedContent(
     price: Double,
     itemNumber: Int,
     onSend: () -> Unit,
+    onYappy: () -> Unit,
     onCancel: () -> Unit
 ) {
     Column(
@@ -383,6 +398,20 @@ private fun VendRequestReceivedContent(
             Icon(Icons.Default.Payment, contentDescription = null)
             Spacer(modifier = Modifier.size(8.dp))
             Text("Send Payment")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onYappy,
+            modifier = Modifier.fillMaxWidth(0.7f),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF6B2FA0)
+            )
+        ) {
+            Icon(Icons.Default.QrCode, contentDescription = null)
+            Spacer(modifier = Modifier.size(8.dp))
+            Text("Pay with Yappy")
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -434,6 +463,75 @@ private fun ProcessingPaymentContent(price: Double, itemNumber: Int) {
     }
 }
 
+/** Yappy payment: Shows QR code and waiting for payment */
+@Composable
+private fun YappyPaymentContent(
+    price: Double,
+    itemNumber: Int,
+    qrHash: String,
+    statusMessage: String,
+    onCancel: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Pay with Yappy",
+            style = MaterialTheme.typography.headlineMedium,
+            color = Color(0xFF6B2FA0)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "$${String.format("%.2f", price)} - Item #$itemNumber",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        QrCodeImage(
+            content = qrHash,
+            size = 250.dp
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        CircularProgressIndicator(
+            modifier = Modifier.size(32.dp),
+            color = Color(0xFF6B2FA0)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = statusMessage,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Scan the QR code with your Yappy app",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        OutlinedButton(
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth(0.7f)
+        ) {
+            Text("Cancel")
+        }
+    }
+}
+
 /** Dispensing: Animation while machine dispenses */
 @Composable
 private fun DispensingContent() {
@@ -475,7 +573,12 @@ private fun DispensingContent() {
 
 /** Success: Checkmark with completion message */
 @Composable
-private fun SuccessContent(itemNumber: Int, onDone: () -> Unit) {
+private fun SuccessContent(
+    itemNumber: Int,
+    message: String = "Product Dispensed!",
+    subtitle: String = "",
+    onDone: () -> Unit
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -490,7 +593,7 @@ private fun SuccessContent(itemNumber: Int, onDone: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Product Dispensed!",
+            text = message,
             style = MaterialTheme.typography.headlineMedium,
             color = StatusOnline
         )
@@ -498,7 +601,8 @@ private fun SuccessContent(itemNumber: Int, onDone: () -> Unit) {
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Item #${String.format("%03X", itemNumber)} has been dispensed successfully",
+            text = if (subtitle.isNotEmpty()) subtitle
+                   else "Item #${String.format("%03X", itemNumber)} has been dispensed successfully",
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant

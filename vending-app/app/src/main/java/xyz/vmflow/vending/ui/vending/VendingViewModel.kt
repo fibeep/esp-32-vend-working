@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +16,7 @@ import xyz.vmflow.vending.bluetooth.BleManager
 import xyz.vmflow.vending.bluetooth.XorCrypto
 import xyz.vmflow.vending.data.repository.DeviceRepository
 import xyz.vmflow.vending.data.repository.VendingRepository
+import xyz.vmflow.vending.data.repository.YappyRepository
 import xyz.vmflow.vending.domain.model.VendRequest
 import xyz.vmflow.vending.domain.payment.PaymentProvider
 import xyz.vmflow.vending.domain.payment.PaymentResult
@@ -55,11 +57,24 @@ sealed class VendingState {
     /** User approved the vend. Processing payment for the selected item. */
     data class ProcessingPayment(val price: Double, val itemNumber: Int) : VendingState()
 
+    /** Yappy QR code displayed. Waiting for customer to scan and pay. */
+    data class YappyPayment(
+        val price: Double,
+        val itemNumber: Int,
+        val qrHash: String,
+        val transactionId: String,
+        val statusMessage: String = "Waiting for payment..."
+    ) : VendingState()
+
     /** Payment approved. Waiting for the machine to dispense the product. */
     data object Dispensing : VendingState()
 
-    /** Product was dispensed successfully. */
-    data class Success(val itemNumber: Int) : VendingState()
+    /** Payment succeeded. Product was dispensed or credit was pushed to machine. */
+    data class Success(
+        val itemNumber: Int,
+        val message: String = "Product Dispensed!",
+        val subtitle: String = ""
+    ) : VendingState()
 
     /** Dispensing failed. The product was not dispensed. */
     data class Failure(val reason: String) : VendingState()
@@ -92,7 +107,8 @@ sealed class VendingState {
 class VendingViewModel(
     private val vendingRepository: VendingRepository,
     private val deviceRepository: DeviceRepository,
-    private val paymentProvider: PaymentProvider
+    private val paymentProvider: PaymentProvider,
+    private val yappyRepository: YappyRepository
 ) : ViewModel() {
 
     companion object {
@@ -124,6 +140,9 @@ class VendingViewModel(
 
     /** The device passkey for local XOR decryption of vend requests. */
     private var devicePasskey: String? = null
+
+    /** Job reference for the Yappy payment status polling coroutine. */
+    private var yappyPollingJob: Job? = null
 
     /**
      * Starts scanning for nearby VMflow BLE devices.
@@ -352,6 +371,172 @@ class VendingViewModel(
         resetToIdle()
     }
 
+    // ── Yappy Payment Flow ──────────────────────────────────────────────────
+
+    /**
+     * Initiates a Yappy payment for the pending vend request.
+     *
+     * 1. Transitions to ProcessingPayment while generating QR
+     * 2. Calls Edge Function to generate Yappy QR code
+     * 3. Transitions to YappyPayment state with QR hash
+     * 4. Starts polling for payment confirmation
+     */
+    fun approveVendWithYappy() {
+        val currentState = _state.value
+        if (currentState !is VendingState.VendRequestReceived) return
+
+        _state.value = VendingState.ProcessingPayment(
+            price = currentState.price,
+            itemNumber = currentState.itemNumber
+        )
+
+        viewModelScope.launch {
+            val payload = lastVendRequestPayload ?: run {
+                _state.value = VendingState.Error("No vend request payload available")
+                return@launch
+            }
+
+            val subdomain = connectedDevice?.subdomain ?: run {
+                _state.value = VendingState.Error("Device subdomain unknown")
+                return@launch
+            }
+
+            val result = yappyRepository.generateQr(
+                payload = payload,
+                subdomain = subdomain,
+                latitude = null,
+                longitude = null
+            )
+
+            result.fold(
+                onSuccess = { qrResponse ->
+                    Log.d(TAG, "Yappy QR generated: txn=${qrResponse.transactionId}")
+                    _state.value = VendingState.YappyPayment(
+                        price = qrResponse.amount,
+                        itemNumber = currentState.itemNumber,
+                        qrHash = qrResponse.qrHash,
+                        transactionId = qrResponse.transactionId
+                    )
+                    startYappyPolling(qrResponse.transactionId)
+                },
+                onFailure = { exception ->
+                    Log.e(TAG, "Yappy QR generation failed: ${exception.message}")
+                    _state.value = VendingState.Error("Yappy QR generation failed: ${exception.message}")
+                }
+            )
+        }
+    }
+
+    /**
+     * Polls the Yappy transaction status every 3 seconds.
+     *
+     * When the status becomes "PAGADO" (paid):
+     * 1. The Edge Function records the sale and returns the approval payload
+     * 2. The approval payload is written to BLE to approve the vend
+     * 3. State transitions to Dispensing
+     *
+     * @param transactionId The Yappy transaction ID to poll.
+     */
+    private fun startYappyPolling(transactionId: String) {
+        yappyPollingJob?.cancel()
+        yappyPollingJob = viewModelScope.launch {
+            val payload = lastVendRequestPayload ?: return@launch
+            val subdomain = connectedDevice?.subdomain ?: return@launch
+
+            while (true) {
+                delay(3000) // Poll every 3 seconds
+
+                val currentState = _state.value
+                if (currentState !is VendingState.YappyPayment) break
+
+                val result = yappyRepository.checkStatus(
+                    transactionId = transactionId,
+                    payload = payload,
+                    subdomain = subdomain,
+                    latitude = null,
+                    longitude = null
+                )
+
+                result.fold(
+                    onSuccess = { statusResponse ->
+                        Log.d(TAG, "Yappy status response: status='${statusResponse.status}', rawStatus='${statusResponse.yappyRawStatus}', bodyKeys=${statusResponse.yappyBodyKeys}, hasPayload=${statusResponse.payload.isNotEmpty()}")
+                        val normalizedStatus = statusResponse.status.uppercase().trim()
+                        when (normalizedStatus) {
+                            "PAGADO" -> {
+                                Log.d(TAG, "Yappy payment confirmed! Sale recorded. Server pushed credit via MQTT.")
+                                // The Edge Function has:
+                                //   1. Recorded the sale with channel "yappy"
+                                //   2. Pushed credit to ESP32 via MQTT (starts new MDB session)
+                                // Try BLE write as bonus (works if MDB session is still alive).
+                                // If BLE fails, the MQTT credit push handles dispensing —
+                                // the customer just needs to re-select their product.
+                                try {
+                                    val approvalPayload = yappyRepository.decodeApprovalPayload(statusResponse)
+                                    bleManager?.writePayload(approvalPayload)
+                                    Log.d(TAG, "BLE approval written successfully")
+                                    _state.value = VendingState.Dispensing
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "BLE write failed (expected if MDB session timed out): ${e.message}")
+                                    // Sale recorded + MQTT credit pushed by server.
+                                    // Customer re-selects product on machine → auto-dispenses.
+                                    _state.value = VendingState.Success(
+                                        itemNumber = currentState.itemNumber,
+                                        message = "Payment Confirmed!",
+                                        subtitle = "Credit sent to machine. Please select your product on the machine to dispense."
+                                    )
+                                }
+                                return@launch
+                            }
+                            else -> {
+                                // Update status message with actual Yappy status
+                                val displayStatus = if (statusResponse.status.isNotEmpty() && statusResponse.status != "UNKNOWN") {
+                                    "Yappy status: ${statusResponse.status}"
+                                } else {
+                                    "Waiting for payment..."
+                                }
+                                _state.value = currentState.copy(
+                                    statusMessage = displayStatus
+                                )
+                            }
+                        }
+                    },
+                    onFailure = { exception ->
+                        Log.e(TAG, "Yappy status check failed: ${exception.message}")
+                        // Don't break polling on transient errors, just log
+                    }
+                )
+            }
+        }
+    }
+
+    /**
+     * Cancels the pending Yappy payment.
+     *
+     * Stops the polling loop, cancels the Yappy transaction,
+     * closes the BLE session, and resets to idle.
+     */
+    fun cancelYappyPayment() {
+        val currentState = _state.value
+        if (currentState !is VendingState.YappyPayment) return
+
+        yappyPollingJob?.cancel()
+        yappyPollingJob = null
+
+        viewModelScope.launch {
+            try {
+                yappyRepository.cancelTransaction(currentState.transactionId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to cancel Yappy transaction: ${e.message}")
+            }
+            try {
+                bleManager?.closeSession()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to close session: ${e.message}")
+            }
+        }
+        resetToIdle()
+    }
+
     /**
      * Sends the credit request to the backend and writes the approval to BLE.
      *
@@ -434,9 +619,20 @@ class VendingViewModel(
      * Handles a session complete notification (0x0D).
      *
      * The vending session has ended on the machine side.
-     * Triggers disconnection and cleanup.
+     * If a Yappy payment is in progress, keep polling — the MDB session
+     * timeout is shorter than the time it takes to complete a QR payment.
+     * The sale will still be recorded and the machine can re-vend.
      */
     private fun handleSessionComplete() {
+        val currentState = _state.value
+        if (currentState is VendingState.YappyPayment) {
+            Log.w(TAG, "MDB session timed out while waiting for Yappy payment — keeping Yappy poll alive")
+            _state.value = currentState.copy(
+                statusMessage = "Machine timed out. Waiting for Yappy payment..."
+            )
+            // Do NOT call disconnect() — keep BLE alive and keep Yappy polling
+            return
+        }
         _state.value = VendingState.SessionComplete
         viewModelScope.launch {
             disconnect()
@@ -452,6 +648,8 @@ class VendingViewModel(
     fun disconnect() {
         notificationJob?.cancel()
         notificationJob = null
+        yappyPollingJob?.cancel()
+        yappyPollingJob = null
 
         viewModelScope.launch {
             try {
@@ -490,6 +688,7 @@ class VendingViewModel(
         super.onCleared()
         scanJob?.cancel()
         notificationJob?.cancel()
+        yappyPollingJob?.cancel()
         // Disconnect is called in a blocking manner since the scope is being cancelled
     }
 }
