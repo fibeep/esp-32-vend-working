@@ -1,0 +1,46 @@
+# VMFlow Vending Backend - Docker Compose
+#
+# Services:
+#   - next-app:   Next.js 15 API server (port 3000)
+#   - mosquitto:  Eclipse Mosquitto MQTT broker (port 1883)
+#   - mqtt-bridge: Node.js MQTT subscriber that processes device messages
+#
+# SSL/HTTPS is handled by the host's AAPanel Nginx reverse proxy,
+# NOT by a Caddy container. See DEPLOYMENT.md Step 4 for AAPanel config.
+#
+# Usage:
+#   Start:    docker compose up -d
+#   Stop:     docker compose down
+#   Logs:     docker compose logs -f
+#   Rebuild:  docker compose up -d --build
+
+services:
+  next-app:
+    build: ./next-app
+    ports:
+      - "3000:3000"
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    restart: unless-stopped
+
+  mqtt-bridge:
+    build: ./mqtt-bridge
+    env_file: .env
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:

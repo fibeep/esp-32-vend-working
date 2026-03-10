@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- String resources for the VMflow Vending App -->
+<resources>
+    <string name="app_name">VMflow Vending</string>
+
+    <!-- Navigation -->
+    <string name="nav_vending">Vending</string>
+    <string name="nav_devices">Devices</string>
+    <string name="nav_sales">Sales</string>
+
+    <!-- Auth -->
+    <string name="login_title">Sign In</string>
+    <string name="register_title">Create Account</string>
+    <string name="email_label">Email</string>
+    <string name="password_label">Password</string>
+    <string name="confirm_password_label">Confirm Password</string>
+    <string name="full_name_label">Full Name</string>
+    <string name="login_button">Sign In</string>
+    <string name="register_button">Create Account</string>
+    <string name="no_account">Don\'t have an account? Sign up</string>
+    <string name="have_account">Already have an account? Sign in</string>
+
+    <!-- Vending -->
+    <string name="scan_devices">Scan for Machines</string>
+    <string name="stop_scan">Stop Scanning</string>
+    <string name="connecting">Connecting...</string>
+    <string name="waiting_selection">Select a product on the machine</string>
+    <string name="processing_payment">Processing payment...</string>
+    <string name="dispensing">Dispensing product...</string>
+    <string name="vend_success">Product dispensed successfully!</string>
+    <string name="vend_failure">Dispensing failed. Please try again.</string>
+    <string name="session_complete">Session complete</string>
+    <string name="disconnect">Disconnect</string>
+
+    <!-- Devices -->
+    <string name="add_device">Add Device</string>
+    <string name="provision_title">Provision Device</string>
+    <string name="scanning_unconfigured">Scanning for unconfigured devices...</string>
+    <string name="device_online">Online</string>
+    <string name="device_offline">Offline</string>
+    <string name="wifi_ssid">WiFi SSID</string>
+    <string name="wifi_password">WiFi Password</string>
+    <string name="send_wifi">Configure WiFi</string>
+
+    <!-- Sales -->
+    <string name="no_sales">No sales recorded yet</string>
+    <string name="refresh">Refresh</string>
+
+    <!-- General -->
+    <string name="logout">Logout</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+    <string name="retry">Retry</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+</resources>

@@ -1,0 +1,48 @@
+# === IDE / Editor ===
+**/.idea/
+.vscode/
+.project
+*.swp
+*.swo
+
+# === Node.js ===
+**/node_modules/
+**/.next/
+**/dist/
+**/package-lock.json
+
+# === Environment / Secrets ===
+**/.env
+!**/.env.example
+
+# === ESP32 / ESP-IDF ===
+**/managed_components/
+**/build/
+**/sdkconfig.old
+
+# === KiCad ===
+kicad/**/*-backups
+kicad/**/fp-info-cache
+kicad/**/*.lck
+kicad/**/*_prl
+
+# === Android ===
+vending-app/.gradle/
+vending-app/build/
+vending-app/app/build/
+vending-app/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# === Supabase ===
+supabase/.temp/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Misc ===
+.temp
+*.log

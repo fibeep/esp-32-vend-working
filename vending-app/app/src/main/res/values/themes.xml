@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Base theme definition for the VMflow Vending App.
+    The actual Material3 theming is applied via Compose Theme.kt.
+    This XML theme is used only for the splash/startup window.
+-->
+<resources>
+    <style name="Theme.VendingApp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/vmflow_primary</item>
+        <item name="android:navigationBarColor">@color/vmflow_surface</item>
+        <item name="android:windowBackground">@color/vmflow_background</item>
+    </style>
+</resources>
