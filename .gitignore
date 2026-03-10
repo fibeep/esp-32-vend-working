@@ -10,6 +10,8 @@
 **/.next/
 **/dist/
 **/package-lock.json
+!vending-backend/next-app/package-lock.json
+!vending-backend/mqtt-bridge/package-lock.json
 
 # === Environment / Secrets ===
 **/.env
