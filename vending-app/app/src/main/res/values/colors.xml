@@ -27,4 +27,7 @@
     <!-- Background -->
     <color name="vmflow_background">#FAFBFF</color>
     <color name="vmflow_surface">#FAFBFF</color>
+
+    <!-- Launcher icon background -->
+    <color name="ic_launcher_background">#2563EB</color>
 </resources>
