@@ -7,7 +7,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import xyz.vmflow.vending.bluetooth.BleDevice
 import xyz.vmflow.vending.bluetooth.BleManager
 import xyz.vmflow.vending.data.repository.DeviceRepository
@@ -29,7 +32,11 @@ data class DevicesUiState(
     val isRefreshing: Boolean = false,
     val error: String? = null,
     val showProvisionDialog: Boolean = false,
-    val provisioningInProgress: Boolean = false
+    val provisioningInProgress: Boolean = false,
+    val showWifiDialog: Boolean = false,
+    val wifiConfigInProgress: Boolean = false,
+    val wifiConfigDevice: Device? = null,
+    val wifiError: String? = null
 )
 
 /**
@@ -155,7 +162,9 @@ class DevicesViewModel(
 
                         _uiState.value = _uiState.value.copy(
                             provisioningInProgress = false,
-                            showProvisionDialog = false
+                            showProvisionDialog = false,
+                            showWifiDialog = true,
+                            wifiConfigDevice = device
                         )
                         loadDevices()
 
@@ -177,6 +186,99 @@ class DevicesViewModel(
                     )
                 }
             )
+        }
+    }
+
+    /**
+     * Shows the WiFi configuration dialog for a specific device.
+     *
+     * @param device The device to configure WiFi for.
+     */
+    fun showWifiConfig(device: Device) {
+        _uiState.value = _uiState.value.copy(
+            showWifiDialog = true,
+            wifiConfigDevice = device,
+            wifiError = null
+        )
+    }
+
+    /**
+     * Hides the WiFi configuration dialog.
+     */
+    fun hideWifiConfig() {
+        _uiState.value = _uiState.value.copy(
+            showWifiDialog = false,
+            wifiConfigDevice = null,
+            wifiError = null
+        )
+    }
+
+    /**
+     * Sends WiFi credentials to a device via BLE.
+     *
+     * Connects to the device, writes the SSID (cmd 0x06) and password (cmd 0x07),
+     * then disconnects. The ESP32 will attempt to connect to the WiFi network
+     * after receiving the password command.
+     *
+     * @param ssid The WiFi network name.
+     * @param password The WiFi network password.
+     */
+    fun configureWifi(ssid: String, password: String) {
+        val device = _uiState.value.wifiConfigDevice ?: return
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(wifiConfigInProgress = true, wifiError = null)
+
+            try {
+                val bleManager = BleManager(viewModelScope)
+                val bleName = device.bleName
+
+                // Scan to find the device by its BLE name so we get a valid Advertisement
+                Log.d(TAG, "Scanning for $bleName to configure WiFi...")
+                val foundDevice = withTimeoutOrNull(10_000L) {
+                    bleManager.scanForDevices()
+                        .filter { it.name == bleName }
+                        .first()
+                }
+
+                if (foundDevice == null) {
+                    _uiState.value = _uiState.value.copy(
+                        wifiConfigInProgress = false,
+                        wifiError = "Device not found nearby. Make sure it is powered on and in range."
+                    )
+                    return@launch
+                }
+
+                Log.d(TAG, "Found device, connecting for WiFi config...")
+                bleManager.connect(foundDevice)
+                delay(500)
+
+                Log.d(TAG, "Writing WiFi SSID: $ssid")
+                bleManager.setWifiSsid(ssid)
+                delay(300)
+
+                Log.d(TAG, "Writing WiFi password (length=${password.length})")
+                bleManager.setWifiPassword(password)
+                delay(1000)
+
+                Log.d(TAG, "WiFi credentials sent, disconnecting")
+                bleManager.disconnect()
+
+                _uiState.value = _uiState.value.copy(
+                    wifiConfigInProgress = false,
+                    showWifiDialog = false,
+                    wifiConfigDevice = null,
+                    wifiError = null
+                )
+                loadDevices()
+
+            } catch (e: Exception) {
+                Log.e(TAG, "WiFi configuration failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(
+                    wifiConfigInProgress = false,
+                    wifiError = "WiFi configuration failed: ${e.message}"
+                )
+            }
         }
     }
 }

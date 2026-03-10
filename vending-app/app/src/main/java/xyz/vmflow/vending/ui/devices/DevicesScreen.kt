@@ -18,11 +18,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -137,7 +139,10 @@ fun DevicesScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(uiState.devices) { device ->
-                                DeviceCard(device = device)
+                                DeviceCard(
+                                    device = device,
+                                    onConfigureWifi = { viewModel.showWifiConfig(device) }
+                                )
                             }
                         }
                     }
@@ -155,6 +160,19 @@ fun DevicesScreen(
                     }
                 )
             }
+
+            // WiFi configuration dialog
+            if (uiState.showWifiDialog) {
+                WifiConfigDialog(
+                    isLoading = uiState.wifiConfigInProgress,
+                    deviceName = uiState.wifiConfigDevice?.subdomain ?: "Device",
+                    error = uiState.wifiError,
+                    onConnect = { ssid, password ->
+                        viewModel.configureWifi(ssid, password)
+                    },
+                    onSkip = viewModel::hideWifiConfig
+                )
+            }
         }
     }
 }
@@ -162,13 +180,14 @@ fun DevicesScreen(
 /**
  * Card displaying a single device's information.
  *
- * Shows the device subdomain as a formatted machine number and an
- * online/offline status indicator.
+ * Shows the device subdomain as a formatted machine number, an
+ * online/offline status indicator, and a WiFi configuration button.
  *
  * @param device The [Device] data to display.
+ * @param onConfigureWifi Callback when the WiFi config button is tapped.
  */
 @Composable
-private fun DeviceCard(device: Device) {
+private fun DeviceCard(device: Device, onConfigureWifi: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -199,6 +218,15 @@ private fun DeviceCard(device: Device) {
                     text = if (device.isOnline) "Online" else "Offline",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (device.isOnline) StatusOnline else StatusOffline
+                )
+            }
+
+            // WiFi configuration button
+            IconButton(onClick = onConfigureWifi) {
+                Icon(
+                    imageVector = Icons.Default.Wifi,
+                    contentDescription = "Configure WiFi",
+                    tint = if (device.isOnline) StatusOnline else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

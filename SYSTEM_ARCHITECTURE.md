@@ -484,6 +484,13 @@ Decrypt:
   - Mosquitto MQTT broker container
   - MQTT Bridge container
 
+### Required Open Ports
+
+| Port | Protocol | Service | Direction | Notes |
+|------|----------|---------|-----------|-------|
+| 443 | TCP | Next.js API (via Caddy/reverse proxy) | Inbound | HTTPS API traffic |
+| 1883 | TCP | Mosquitto MQTT Broker | Inbound | **CRITICAL:** Must be open for ESP32 devices to connect. Without this port open, devices cannot report status (online/offline), publish cash sales, or receive remote commands. Open this port in both the VPS hosting provider's firewall (e.g. Hostinger firewall panel) and the OS-level firewall (e.g. `ufw allow 1883/tcp`). |
+
 ### Supabase Configuration
 - **Project URL:** `https://luntgcliwnyvrmrqpdts.supabase.co`
 - **Auth:** GoTrue (email/password)
