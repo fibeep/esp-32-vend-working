@@ -13,6 +13,7 @@ import xyz.vmflow.vending.bluetooth.BleConstants
 import xyz.vmflow.vending.bluetooth.BleDevice
 import xyz.vmflow.vending.bluetooth.BleManager
 import xyz.vmflow.vending.bluetooth.XorCrypto
+import xyz.vmflow.vending.data.repository.DeviceRepository
 import xyz.vmflow.vending.data.repository.VendingRepository
 import xyz.vmflow.vending.domain.model.VendRequest
 import xyz.vmflow.vending.domain.payment.PaymentProvider
@@ -48,7 +49,10 @@ sealed class VendingState {
     /** Connected and session started. Waiting for user to select a product on the machine. */
     data object WaitingForSelection : VendingState()
 
-    /** Vend request received. Processing payment for the selected item. */
+    /** Vend request received. Showing product info, waiting for user to approve. */
+    data class VendRequestReceived(val price: Double, val itemNumber: Int) : VendingState()
+
+    /** User approved the vend. Processing payment for the selected item. */
     data class ProcessingPayment(val price: Double, val itemNumber: Int) : VendingState()
 
     /** Payment approved. Waiting for the machine to dispense the product. */
@@ -87,6 +91,7 @@ sealed class VendingState {
  */
 class VendingViewModel(
     private val vendingRepository: VendingRepository,
+    private val deviceRepository: DeviceRepository,
     private val paymentProvider: PaymentProvider
 ) : ViewModel() {
 
@@ -116,6 +121,9 @@ class VendingViewModel(
 
     /** The raw payload from the last vend request notification (for forwarding to backend). */
     private var lastVendRequestPayload: ByteArray? = null
+
+    /** The device passkey for local XOR decryption of vend requests. */
+    private var devicePasskey: String? = null
 
     /**
      * Starts scanning for nearby VMflow BLE devices.
@@ -191,6 +199,24 @@ class VendingViewModel(
 
         viewModelScope.launch {
             try {
+                // Fetch device passkey from backend for local decryption
+                Log.d(TAG, "Fetching passkey for subdomain: ${device.subdomain}")
+                val devicesResult = deviceRepository.getDevices()
+                devicesResult.fold(
+                    onSuccess = { devices ->
+                        val backendDevice = devices.find { it.subdomain == device.subdomain }
+                        if (backendDevice != null) {
+                            devicePasskey = backendDevice.passkey
+                            Log.d(TAG, "Passkey found for device ${device.subdomain}")
+                        } else {
+                            Log.w(TAG, "Device ${device.subdomain} not found in backend, will skip local decryption")
+                        }
+                    },
+                    onFailure = { e ->
+                        Log.w(TAG, "Failed to fetch passkey: ${e.message}, will skip local decryption")
+                    }
+                )
+
                 bleManager?.connect(device)
                 bleManager?.startSession()
                 _state.value = VendingState.WaitingForSelection
@@ -201,6 +227,7 @@ class VendingViewModel(
                 Log.e(TAG, "Connection error: ${e.message}")
                 _state.value = VendingState.Error("Connection failed: ${e.message}")
                 connectedDevice = null
+                devicePasskey = null
             }
         }
     }
@@ -269,47 +296,60 @@ class VendingViewModel(
         // Store raw payload for forwarding to the backend
         lastVendRequestPayload = payload.copyOf()
 
-        // For UI display, we can show the item number from the command
-        // The actual price decryption requires the passkey which the backend has
-        val itemNumber = if (payload.size >= 8) {
-            ((payload[6].toInt() and 0xFF) shl 8) or (payload[7].toInt() and 0xFF)
+        // Decrypt payload locally to show price and item number to the user
+        val passkey = devicePasskey
+        if (passkey != null && payload.size == BleConstants.PAYLOAD_SIZE) {
+            val vendRequest = XorCrypto.decode(payload.copyOf(), passkey)
+            if (vendRequest != null) {
+                Log.d(TAG, "Vend request: item #${vendRequest.itemNumber}, price=$${vendRequest.displayPrice}")
+                _state.value = VendingState.VendRequestReceived(
+                    price = vendRequest.displayPrice,
+                    itemNumber = vendRequest.itemNumber
+                )
+            } else {
+                Log.e(TAG, "Failed to decrypt vend request (checksum mismatch)")
+                _state.value = VendingState.Error("Failed to decrypt vend request. Wrong passkey?")
+            }
         } else {
-            0
+            Log.e(TAG, "No passkey available for decryption")
+            _state.value = VendingState.Error("Device passkey not available. Re-register the device.")
         }
+    }
+
+    /**
+     * Approves the pending vend request after the user taps "Send".
+     *
+     * Transitions to ProcessingPayment, sends the credit request to the backend,
+     * and writes the approval payload to BLE.
+     */
+    fun approveVend() {
+        val currentState = _state.value
+        if (currentState !is VendingState.VendRequestReceived) return
 
         _state.value = VendingState.ProcessingPayment(
-            price = 0.0, // Price will be validated by backend
-            itemNumber = itemNumber
+            price = currentState.price,
+            itemNumber = currentState.itemNumber
         )
 
-        // Process payment via the pluggable provider
-        val paymentResult = paymentProvider.processPayment(0.0, "USD")
+        viewModelScope.launch {
+            requestCreditFromBackend()
+        }
+    }
 
-        when (paymentResult) {
-            is PaymentResult.Success -> {
-                // Payment succeeded - request credit from backend
-                requestCreditFromBackend()
-            }
-
-            is PaymentResult.Failure -> {
-                _state.value = VendingState.Failure(paymentResult.reason)
-                // Cancel the session since payment failed
-                try {
-                    bleManager?.closeSession()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to close session: ${e.message}")
-                }
-            }
-
-            is PaymentResult.Cancelled -> {
-                _state.value = VendingState.Failure("Payment cancelled")
-                try {
-                    bleManager?.closeSession()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to close session: ${e.message}")
-                }
+    /**
+     * Cancels the pending vend request when the user taps "Cancel".
+     *
+     * Closes the BLE session and disconnects from the device.
+     */
+    fun cancelVend() {
+        viewModelScope.launch {
+            try {
+                bleManager?.closeSession()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to close session: ${e.message}")
             }
         }
+        resetToIdle()
     }
 
     /**
@@ -426,6 +466,7 @@ class VendingViewModel(
             }
             connectedDevice = null
             lastVendRequestPayload = null
+            devicePasskey = null
         }
     }
 

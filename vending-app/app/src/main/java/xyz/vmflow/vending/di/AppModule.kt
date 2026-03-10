@@ -85,7 +85,7 @@ val appModule = module {
     viewModel { RegisterViewModel(authRepository = get()) }
 
     /** Vending flow ViewModel (the core state machine) */
-    viewModel { VendingViewModel(vendingRepository = get(), paymentProvider = get()) }
+    viewModel { VendingViewModel(vendingRepository = get(), deviceRepository = get(), paymentProvider = get()) }
 
     /** Device management screen ViewModel */
     viewModel { DevicesViewModel(deviceRepository = get()) }

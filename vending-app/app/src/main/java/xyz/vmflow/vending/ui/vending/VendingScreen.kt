@@ -87,6 +87,13 @@ fun VendingScreen(
 
             is VendingState.WaitingForSelection -> WaitingContent()
 
+            is VendingState.VendRequestReceived -> VendRequestReceivedContent(
+                price = currentState.price,
+                itemNumber = currentState.itemNumber,
+                onSend = viewModel::approveVend,
+                onCancel = viewModel::cancelVend
+            )
+
             is VendingState.ProcessingPayment -> ProcessingPaymentContent(
                 price = currentState.price,
                 itemNumber = currentState.itemNumber
@@ -322,6 +329,70 @@ private fun WaitingContent() {
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/** Vend request received: Shows product info and Send/Cancel buttons */
+@Composable
+private fun VendRequestReceivedContent(
+    price: Double,
+    itemNumber: Int,
+    onSend: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.ShoppingCart,
+            contentDescription = "Product selected",
+            modifier = Modifier.size(96.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "Product Selected",
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Item #$itemNumber",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "$${String.format("%.2f", price)}",
+            style = MaterialTheme.typography.displaySmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = onSend,
+            modifier = Modifier.fillMaxWidth(0.7f)
+        ) {
+            Icon(Icons.Default.Payment, contentDescription = null)
+            Spacer(modifier = Modifier.size(8.dp))
+            Text("Send Payment")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth(0.7f)
+        ) {
+            Text("Cancel")
+        }
     }
 }
 
