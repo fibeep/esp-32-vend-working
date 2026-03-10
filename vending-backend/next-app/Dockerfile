@@ -1,13 +1,8 @@
-# --- Stage 1: Install dependencies ---
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY vending-backend/next-app/package.json vending-backend/next-app/package-lock.json* ./
-RUN npm ci --omit=dev
-
-# --- Stage 2: Build the Next.js application ---
+# --- Stage 1: Build the Next.js application ---
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY vending-backend/next-app/package.json vending-backend/next-app/package-lock.json* ./
+RUN npm ci
 COPY vending-backend/next-app/ .
 RUN npm run build
 
