@@ -1,0 +1,192 @@
+menu "MDB Cashless Device"
+
+    choice
+        prompt "Peripheral Addresses"
+        default CASHLESS_ADDR_1
+
+        config CASHLESS_ADDR_1
+            bool "Cashless Device #1"
+
+        config CASHLESS_ADDR_2
+            bool "Cashless Device #2"
+
+    endchoice
+
+    config CASHLESS_DEVICE_ADDRESS
+        int
+        default 16 if CASHLESS_ADDR_1
+        default 96 if CASHLESS_ADDR_2
+
+    choice
+        prompt "Country / Currency Code"
+        default CURRENCY_UNKNOWN
+
+        config CURRENCY_EUR
+            bool "EUR - 0x0978"
+
+        config CURRENCY_USD
+            bool "USD - 0x0840"
+
+        config CURRENCY_BRL
+            bool "BRL - 0x0986"
+
+        config CURRENCY_UNKNOWN
+            bool "UNKNOWN - 0xffff"
+    endchoice
+
+    config MDB_CURRENCY_CODE
+        int
+        default 6520 if CURRENCY_EUR
+        default 6208 if CURRENCY_USD
+        default 6534 if CURRENCY_BRL
+        default 65535 if CURRENCY_UNKNOWN
+
+    choice
+        prompt "Scale Factor (MDB)"
+        default SCALE_FACTOR_1
+
+        config SCALE_FACTOR_1
+            bool "1"
+
+        config SCALE_FACTOR_10
+            bool "10"
+
+        config SCALE_FACTOR_100
+            bool "100"
+
+    endchoice
+
+    config MDB_SCALE_FACTOR
+        int
+        default 1 if SCALE_FACTOR_1
+        default 10 if SCALE_FACTOR_10
+        default 100 if SCALE_FACTOR_100
+
+    config MDB_DECIMAL_PLACES
+        int "Decimal Places (MDB)"
+        default 2
+        range 0 3
+
+endmenu # MDB Cashless Device
+
+menu "MQTT Broker Configuration"
+
+    config MQTT_BROKER_URI
+        string "Default MQTT Broker URI"
+        default "mqtt://mqtt.panamavendingmachines.com"
+        help
+            Default MQTT broker URI used when no NVS override is present.
+            Can be overridden at runtime via BLE command 0x08 or the Web UI.
+            Examples: "mqtt://mqtt.panamavendingmachines.com", "mqtt://192.168.1.100:1883"
+
+    config MQTT_USERNAME
+        string "Default MQTT Username"
+        default "vmflow"
+        help
+            Default MQTT broker username.  Can be overridden at runtime
+            via BLE command 0x09.
+
+    config MQTT_PASSWORD
+        string "Default MQTT Password"
+        default "vmflow"
+        help
+            Default MQTT broker password.  Can be overridden at runtime
+            via BLE command 0x09.
+
+endmenu # MQTT Broker Configuration
+
+menu "Yappy Payment Configuration"
+
+    config YAPPY_KIOSK_MODE
+        bool "Enable Yappy Kiosk Mode (auto-session)"
+        default y
+        help
+            When enabled, the machine operates as a self-service kiosk:
+            - Auto-pushes unlimited funds on READER_ENABLE (always in session)
+            - Auto-restarts session on SESSION_COMPLETE
+            - VEND_REQUEST triggers Yappy QR generation on the dashboard
+            - MDB session timer is kept alive during Yappy payment polling
+
+    config YAPPY_BASE_URL
+        string "Yappy API Base URL"
+        default "https://api-checkout.yappy.cloud/v1"
+        help
+            Base URL for the Yappy payment API.
+            Can be overridden at runtime via NVS key "yappy_base_url"
+            in the "yappy" namespace.
+
+    config YAPPY_API_KEY
+        string "Yappy API Key"
+        default "85f0e569-3648-4bab-9043-c925450cecea"
+        help
+            API key for Yappy payment gateway authentication.
+            Can be overridden at runtime via NVS key "yappy_api_key"
+            in the "yappy" namespace.
+
+    config YAPPY_SECRET_KEY
+        string "Yappy Secret Key"
+        default "WVBfRkZGOEQ2QkUtQ0REOC0zRDdBLTk3Q0QtQTI2MjlCRDk1NEJD"
+        help
+            Secret key for Yappy payment gateway authentication.
+            Can be overridden at runtime via NVS key "yappy_secret_key"
+            in the "yappy" namespace.
+
+    config YAPPY_ID_DEVICE
+        string "Yappy Device ID"
+        default "prba-01"
+        help
+            Device identifier registered with Yappy.
+            Can be overridden at runtime via NVS key "yappy_id_device"
+            in the "yappy" namespace.
+
+    config YAPPY_NAME_DEVICE
+        string "Yappy Device Name"
+        default "Nombre de caja"
+        help
+            Human-readable name for this vending machine in Yappy.
+            Can be overridden at runtime via NVS key "yappy_name_device"
+            in the "yappy" namespace.
+
+    config YAPPY_USER_DEVICE
+        string "Yappy Device User"
+        default "codigo-cajero"
+        help
+            User account associated with this device in Yappy.
+            Can be overridden at runtime via NVS key "yappy_user_device"
+            in the "yappy" namespace.
+
+    config YAPPY_ID_GROUP
+        string "Yappy Group ID"
+        default "prueba"
+        help
+            Group identifier for this device in Yappy.
+            Can be overridden at runtime via NVS key "yappy_id_group"
+            in the "yappy" namespace.
+
+endmenu # Yappy Payment Configuration
+
+menu "Supabase Edge Function Configuration"
+
+    config SUPABASE_URL
+        string "Supabase Project URL"
+        default "https://luntgcliwnyvrmrqpdts.supabase.co"
+        help
+            Your Supabase project URL. Used by the ESP32 to call
+            the yappy-payment Edge Function.
+
+    config SUPABASE_ANON_KEY
+        string "Supabase Anon Key"
+        default "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1bnRnY2xpd255dnJtcnFwZHRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMDA2MzEsImV4cCI6MjA4ODY3NjYzMX0.s5mBlh0YTXi2xhfd1vOX_R9Aof6S6D5ZXc8zK_G7074"
+        help
+            Supabase anonymous (publishable) key. Sent as the
+            'apikey' header when calling Edge Functions.
+
+    config ESP32_DEVICE_KEY
+        string "ESP32 Device Key"
+        default "vmf-esp32-yappy-2024-d7f3a9b2"
+        help
+            Shared secret between the ESP32 and the yappy-payment
+            Edge Function. Sent as the 'x-device-key' header to
+            authenticate ESP32 requests without a Supabase JWT.
+
+endmenu # Supabase Edge Function Configuration

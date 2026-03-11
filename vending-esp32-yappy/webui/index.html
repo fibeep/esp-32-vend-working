@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>VMFlow Target Board</title>
+   </head>
+   <body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:16px">
+      
+      <div style="max-width:480px;margin:auto;background:#fff;padding:16px;border-radius:4px">
+         
+         <h1 style="margin-top:0">VMFlow</h1>
+         <p style="color:#666;font-size:14px">Free the vending machine</p>
+         
+         <div style="border:1px solid #ddd;padding:12px;margin-bottom:16px">
+            <h2 style="margin-top:0">Status</h2>
+            <div>IP: <span id="ipaddress">(not yet implemented)</span></div>
+            <div style="color:#666;font-size:14px">More to come...</div>
+         </div>
+         
+         <div style="border:1px solid #ddd;padding:12px">
+            <h2 style="margin-top:0">Settings</h2>
+            <label>WiFi SSID</label><br>
+            <input id="wifi_ssid" type="text" placeholder="WiFi Name" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>WiFi Password</label><br>
+            <input id="wifi_password" type="password" placeholder="********" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>MQTT Server Address</label><br>
+            <input id="mqtt_server" type="text" placeholder="mqtt.panamavendingmachines.com" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <button onclick="saveSettings()" style="padding:8px 16px">
+            Save
+            </button>
+         </div>
+
+         <div style="border:1px solid #ddd;padding:12px;margin-top:16px">
+            <h2 style="margin-top:0">Yappy Payment Settings</h2>
+            <label>API Key</label><br>
+            <input id="yappy_api_key" type="text" placeholder="Yappy API Key" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>Secret Key</label><br>
+            <input id="yappy_secret_key" type="text" placeholder="Yappy Secret Key" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>Device ID</label><br>
+            <input id="yappy_id_device" type="text" placeholder="Device ID" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>Device Name</label><br>
+            <input id="yappy_name_device" type="text" placeholder="VMflow Vending" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>Device User</label><br>
+            <input id="yappy_user_device" type="text" placeholder="User account" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>Group ID</label><br>
+            <input id="yappy_id_group" type="text" placeholder="Group ID" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <label>Base URL</label><br>
+            <input id="yappy_base_url" type="text" placeholder="https://api.pagosdeyappy.com" style="width:100%;padding:8px;margin-bottom:12px;box-sizing:border-box"><br>
+            <button onclick="saveYappy()" style="padding:8px 16px">
+            Save Yappy Settings
+            </button>
+            <span id="yappy_status" style="margin-left:8px;color:#666;font-size:14px"></span>
+         </div>
+
+      </div>
+      <script>
+         function saveSettings() {
+             const payload = {
+                 ssid: document.getElementById("wifi_ssid").value,
+                 password: document.getElementById("wifi_password").value,
+                 mqtt_server: document.getElementById("mqtt_server").value
+             };
+         
+             fetch('/api/v1/settings/set', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify(payload)
+             })
+             .then(r => r.json())
+             .then(d => console.log('Saved:', d))
+             .catch(e => console.error(e));
+         }
+         
+         function saveYappy() {
+             const payload = {
+                 api_key: document.getElementById("yappy_api_key").value,
+                 secret_key: document.getElementById("yappy_secret_key").value,
+                 id_device: document.getElementById("yappy_id_device").value,
+                 name_device: document.getElementById("yappy_name_device").value,
+                 user_device: document.getElementById("yappy_user_device").value,
+                 id_group: document.getElementById("yappy_id_group").value,
+                 base_url: document.getElementById("yappy_base_url").value
+             };
+
+             const st = document.getElementById("yappy_status");
+             st.textContent = "Saving...";
+             st.style.color = "#666";
+
+             fetch('/api/v1/yappy/settings', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify(payload)
+             })
+             .then(r => r.json())
+             .then(d => {
+                 st.textContent = "Saved! Restart ESP32 to apply.";
+                 st.style.color = "green";
+             })
+             .catch(e => {
+                 st.textContent = "Error: " + e;
+                 st.style.color = "red";
+             });
+         }
+
+         window.addEventListener('DOMContentLoaded', () => {
+             fetch('/api/v1/system/info')
+                 .then(r => r.json())
+                 .then(d => {
+                     document.getElementById("wifi_ssid").value = d.wifi_ssid || '';
+                     document.getElementById("wifi_password").value = d.wifi_password || '';
+                     document.getElementById("mqtt_server").value = d.mqtt_server || '';
+                 })
+                 .catch(e => console.error(e));
+
+             fetch('/api/v1/yappy/settings')
+                 .then(r => r.json())
+                 .then(d => {
+                     document.getElementById("yappy_api_key").value = d.api_key || '';
+                     document.getElementById("yappy_secret_key").value = d.secret_key || '';
+                     document.getElementById("yappy_id_device").value = d.id_device || '';
+                     document.getElementById("yappy_name_device").value = d.name_device || '';
+                     document.getElementById("yappy_user_device").value = d.user_device || '';
+                     document.getElementById("yappy_id_group").value = d.id_group || '';
+                     document.getElementById("yappy_base_url").value = d.base_url || '';
+                 })
+                 .catch(e => console.error(e));
+         });
+      </script>
+   </body>
+</html>

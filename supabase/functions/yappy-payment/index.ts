@@ -294,8 +294,24 @@ async function handleCheckStatus(
 
   console.log(`[yappy] Transaction ${transaction_id} status: "${txStatus}" (normalized: "${txStatusUpper}")`);
 
+  // ── Debug: log EVERY check-status call to yappy_debug_log ──
+  try {
+    await supabaseAdmin.from("yappy_debug_log").insert([{
+      transaction_id,
+      raw_response: statusData,
+      extracted_status: txStatusUpper || "EMPTY",
+      action: "check-status",
+    }]);
+  } catch (dbgErr) {
+    console.error("[yappy] Debug log insert failed:", dbgErr);
+  }
+
+  // Accept multiple possible "paid" statuses (Yappy may use different terms)
+  const PAID_STATUSES = ["PAGADO", "EJECUTADO", "COMPLETADO", "APROBADO", "PAID", "COMPLETED", "APPROVED"];
+  const isPaid = PAID_STATUSES.includes(txStatusUpper);
+
   // If not paid yet, return the current status + debug info
-  if (txStatusUpper !== "PAGADO") {
+  if (!isPaid) {
     return jsonResponse({
       status: txStatus ?? "UNKNOWN",
       yappy_raw_status: txStatus,
