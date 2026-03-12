@@ -1,679 +1,608 @@
-# VMflow Vending System - Architecture & Status Document
+# VMflow Cashless Vending System - Architecture Documentation
 
-> **Purpose:** This document serves as a comprehensive reference for any developer or AI agent joining the project. It describes the full system architecture, current state of deployment, configurations, and known issues.
+> **Last Updated:** 2026-03-12
 >
-> **Last Updated:** 2026-03-10
-> **GitHub Repo:** https://github.com/fibeep/esp-32-vend-working
+> This document describes the current system architecture where the ESP32-S3
+> communicates directly with a Supabase Edge Function to process Yappy mobile
+> payments. There is no Android app or tablet in this flow.
 
 ---
 
-## Table of Contents
+## Overview
 
-1. [System Overview](#1-system-overview)
-2. [Component Architecture](#2-component-architecture)
-3. [vending-esp32 (ESP32-S3 Firmware)](#3-vending-esp32-esp32-s3-firmware)
-4. [vending-app (Android Mobile App)](#4-vending-app-android-mobile-app)
-5. [vending-backend (VPS Services)](#5-vending-backend-vps-services)
-6. [Supabase (Cloud Backend)](#6-supabase-cloud-backend)
-7. [BLE Communication Protocol](#7-ble-communication-protocol)
-8. [Vending Flow (End-to-End)](#8-vending-flow-end-to-end)
-9. [Infrastructure & Domains](#9-infrastructure--domains)
-10. [Database Schema](#10-database-schema)
-11. [Current Status & Known Issues](#11-current-status--known-issues)
-12. [Development Environment Setup](#12-development-environment-setup)
-13. [Key File Reference](#13-key-file-reference)
+VMflow is a cashless vending machine payment system that connects an **ESP32-S3 microcontroller** (installed inside a vending machine) to the **Yappy mobile payment network** (Panama's leading mobile wallet) through a **Supabase Edge Function** backend.
 
----
-
-## 1. System Overview
-
-VMflow is a cashless vending machine payment system built around the ESP32-S3 microcontroller. It enables BLE-based mobile payments for vending machines that use the MDB (Multi-Drop Bus) protocol.
-
-### High-Level Architecture
+The ESP32 never talks to Yappy directly. All Yappy API interactions are proxied through the Edge Function, which also manages session tokens, records sales, and handles authentication.
 
 ```
-                          CLOUD (Supabase)
-                     +-----------------------+
-                     | PostgreSQL Database    |
-                     | GoTrue Auth            |
-                     | Edge Functions         |
-                     | PostgREST API          |
-                     +-----------+-----------+
-                                 |
-                          HTTPS/REST
-                                 |
-     +---------------------------+---------------------------+
-     |                                                       |
-ANDROID APP                                          VPS (Backend)
-+------------------+                           +------------------+
-| Kotlin/Compose   |                           | Next.js API      |
-| Kable BLE        |                           | Mosquitto MQTT   |
-| Ktor HTTP        |                           | MQTT Bridge      |
-| Koin DI          |                           +--------+---------+
-+--------+---------+                                    |
-         |                                         MQTT/TLS
-     BLE GATT                                          |
-         |                                    +--------+---------+
-+--------+---------+                          |                  |
-|  ESP32-S3        +--- WiFi/MQTT ------------+                  |
-|  NimBLE BLE      |                                             |
-|  MDB Protocol    |                                             |
-+--------+---------+                                             |
-         |                                                       |
-    9-bit UART (MDB)                                             |
-         |                                                       |
-+--------+---------+                                             |
-| VENDING MACHINE  |                                             |
-| (VMC Controller) |                                             |
-+------------------+                                             |
-```
-
-### Communication Channels
-
-| Channel | From | To | Protocol | Purpose |
-|---------|------|----|----------|---------|
-| BLE GATT | Android App | ESP32-S3 | BLE 5.0 | Device provisioning, vend session control |
-| 9-bit UART | ESP32-S3 | Vending Machine | MDB @ 9600 baud | Cashless reader emulation |
-| MQTT/TLS | ESP32-S3 | VPS Mosquitto | MQTT 3.1.1 | Telemetry, remote credit, status |
-| HTTPS/REST | Android App | Supabase | REST/JSON | Auth, device CRUD, sales recording |
-| HTTPS/REST | VPS Backend | Supabase | REST/JSON | Data sync, auth verification |
-
----
-
-## 2. Component Architecture
-
-The system has **4 main components**:
-
-| # | Component | Location | Technology | Status |
-|---|-----------|----------|------------|--------|
-| 1 | **vending-esp32** | `vending-esp32/` | C, ESP-IDF v6.1, NimBLE | Working |
-| 2 | **vending-app** | `vending-app/` | Kotlin, Jetpack Compose, Kable | Working |
-| 3 | **vending-backend** | `vending-backend/` | Next.js 15, Mosquitto, MQTT Bridge | Deployed on VPS |
-| 4 | **Supabase** | Cloud (luntgcliwnyvrmrqpdts) | PostgreSQL, GoTrue, Edge Functions | Active |
-
----
-
-## 3. vending-esp32 (ESP32-S3 Firmware)
-
-### Overview
-The ESP32-S3 firmware acts as a **cashless payment device** on the MDB bus. It emulates a cashless reader (MDB address 16), communicates with the Android app via BLE, and reports telemetry via MQTT.
-
-### Key Configuration
-- **Target:** ESP32-S3
-- **Flash:** 16MB
-- **Partition Table:** Two OTA (supports OTA updates)
-- **BLE Stack:** NimBLE (lightweight, BLE-only)
-- **MDB Address:** 16 (cashless reader)
-- **MDB Scale Factor:** 1, Decimal Places: 2
-- **MQTT Broker:** `mqtt://mqtt.panamavendingmachines.com`
-
-### Source Files
-
-| File | Purpose |
-|------|---------|
-| `main/main.c` | Application entry point, task initialization |
-| `main/ble_handler.c/h` | BLE GATT server, provisioning commands |
-| `main/nimble.c` | NimBLE stack configuration |
-| `main/mdb_handler.c/h` | MDB protocol implementation (9-bit UART) |
-| `main/mqtt_handler.c` | MQTT client, telemetry publishing |
-| `main/xor_crypto.c` | XOR encryption/decryption for BLE payloads |
-| `main/webui_server.c/h` | Local web UI for device status |
-| `main/telemetry.c` | Metrics collection |
-| `main/led_status.c/h` | Status LED control |
-| `main/config.h` | Global configuration constants |
-
-### BLE Service
-- **Service UUID:** `020012ac-4202-78b8-ed11-da4642c6bbb2`
-- **Characteristic UUID:** `020012ac-4202-78b8-ed11-de46769cafc9`
-- **IMPORTANT:** NimBLE's `BLE_UUID128_INIT` macro takes bytes in **little-endian** (reversed) order
-
-### NVS Storage
-The ESP32 stores provisioning data in NVS (Non-Volatile Storage):
-- `subdomain` - Device identifier (assigned by Supabase)
-- `passkey` - 18-character XOR encryption key
-- `wifi_ssid` / `wifi_pass` - WiFi credentials
-
-### Build Commands
-```bash
-export IDF_PATH="/Users/salomoncohen/esp/esp-idf"
-export PATH="/usr/local/bin:$PATH"  # Python 3.10+ required
-source $IDF_PATH/export.sh
-cd vending-esp32
-idf.py build
-idf.py -p /dev/cu.usbmodem14201 flash monitor
++-------------------+       HTTPS/TLS        +---------------------+       HTTPS        +-------------+
+|                   |  --(JSON over POST)-->  |                     |  --(Yappy API)--> |             |
+|    ESP32-S3       |                         |  Supabase Edge Fn   |                    |  Yappy API  |
+|  (in vending      |  <--(JSON response)--  |  (yappy-payment)    |  <--(response)--  |  (Panama)   |
+|   machine)        |                         |                     |                    |             |
++-------------------+                         +---------------------+                    +-------------+
+        |                                             |
+        |  SPI bus                                    |  SQL (service role)
+        v                                             v
++-------------------+                         +---------------------+
+|  ILI9488 Display  |                         |  Supabase Postgres  |
+|  (320x480, QR)    |                         |  (sales, devices)   |
++-------------------+                         +---------------------+
 ```
 
 ---
 
-## 4. vending-app (Android Mobile App)
+## Components
 
-### Overview
-The Android app is the user-facing component. It handles:
-- User authentication (login/register)
-- BLE scanning and device connection
-- Device provisioning (writing subdomain/passkey/WiFi to ESP32)
-- Vending flow (product selection display, payment approval)
-- Sales history viewing
-- Device management
+### 1. ESP32-S3 Firmware (`vending-esp32-display/`)
 
-### Tech Stack
-- **Language:** Kotlin
-- **UI:** Jetpack Compose + Material 3
-- **BLE:** Kable library
-- **HTTP:** Ktor (OkHttp engine)
-- **DI:** Koin
-- **Min SDK:** 26 (Android 8.0)
-- **Target SDK:** 35 (Android 15)
-- **Package:** `xyz.vmflow.vending`
+The ESP32-S3 sits inside the vending machine and communicates with the machine's controller (VMC) over the **MDB bus** (Multi-Drop Bus, the industry-standard vending protocol). It acts as a **Level 1 cashless peripheral in kiosk mode** -- meaning it auto-starts a payment session with unlimited funds as soon as the machine is ready.
 
-### App Architecture (MVVM)
+**Key modules:**
 
-```
-UI Layer (Composables)
-    ├── LoginScreen / RegisterScreen
-    ├── DevicesScreen (device management + provisioning)
-    ├── VendingScreen (core vending flow)
-    └── SalesScreen (transaction history)
-         │
-ViewModel Layer
-    ├── LoginViewModel
-    ├── RegisterViewModel
-    ├── DevicesViewModel
-    ├── VendingViewModel (state machine)
-    └── SalesViewModel
-         │
-Repository Layer
-    ├── AuthRepository (login, register, token management)
-    ├── DeviceRepository (CRUD for ESP32 devices)
-    ├── VendingRepository (credit request API)
-    └── SalesRepository (sales history)
-         │
-Data Layer
-    ├── ApiClient (Ktor HTTP client)
-    ├── BleManager (Kable BLE operations)
-    └── XorCrypto (payload encryption/decryption)
-```
+| Module | File | Purpose |
+|--------|------|---------|
+| MDB Handler | `mdb_handler.c` | UART-based MDB bus protocol, talks to vending machine |
+| Yappy Handler | `yappy_handler.c` | Payment state machine, calls Edge Function |
+| XOR Crypto | `xor_crypto.c` | 19-byte XOR payload encryption/decryption |
+| Display Handler | `display_handler.c` | ILI9488 SPI display via LVGL (QR codes, status) |
+| MQTT Handler | `mqtt_handler.c` | MQTT client for telemetry and remote credit push |
+| BLE Handler | `ble_handler.c` | NimBLE for device provisioning and BLE payments |
+| Web UI Server | `webui_server.c` | HTTP server for WiFi/device configuration |
+| Config | `config.h` | Pin map, MDB constants, shared flags |
 
-### Vending State Machine
-The core vending flow follows this state machine:
+### 2. Supabase Edge Function (`supabase/functions/yappy-payment/`)
 
-```
-Idle
-  └─► Scanning (BLE scan for VMflow devices)
-       └─► DevicesFound (list of discovered devices)
-            └─► Connecting (BLE connection in progress)
-                 └─► WaitingForSelection (session started, waiting for product)
-                      └─► VendRequestReceived (shows price + item number)
-                           ├─► [User taps "Send Payment"]
-                           │    └─► ProcessingPayment (calling backend)
-                           │         └─► Dispensing (waiting for machine)
-                           │              ├─► Success (product dispensed)
-                           │              └─► Failure (dispensing failed)
-                           └─► [User taps "Cancel"]
-                                └─► Idle
+A single Deno-based serverless function (`index.ts`) that acts as a proxy between the ESP32 and the Yappy API. It handles three actions:
 
-SessionComplete ─► Idle (machine ended session)
-Error ─► Idle (reset on error)
-```
+| Action | Purpose |
+|--------|---------|
+| `generate-qr` | Creates a dynamic Yappy QR code for a given price |
+| `check-status` | Polls Yappy for transaction payment status |
+| `cancel` | Cancels a pending transaction |
 
-### Key API Endpoints Used
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/auth/v1/token?grant_type=password` | POST | Login |
-| `/auth/v1/signup` | POST | Register |
-| `/auth/v1/token?grant_type=refresh_token` | POST | Token refresh |
-| `/rest/v1/embedded` | GET | List devices |
-| `/rest/v1/embedded` | POST | Register new device |
-| `/rest/v1/sales` | GET | Sales history |
-| `/functions/v1/request-credit` | POST | Credit request (vending) |
+### 3. Supabase Postgres Database
 
-### Build & Install
-```bash
-export ANDROID_HOME=~/Library/Android/sdk
-cd vending-app
-./gradlew assembleDebug
-~/Library/Android/sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
-
-# Launch
-adb shell am start -n xyz.vmflow.vending/.ui.MainActivity
-
-# Logs
-adb logcat -s VendingViewModel:D BleManager:D
-```
-
-### Test Device
-- **Phone:** Samsung (device ID: `RFCY7060K9Z`)
-- **Connected via:** USB, accessible via ADB
-- **Note:** Do NOT take screenshots of the phone (API errors with image analysis)
+Stores device registrations, sales records, Yappy session tokens, and debug logs. The Edge Function uses the **service role key** to bypass Row Level Security for all database operations.
 
 ---
 
-## 5. vending-backend (VPS Services)
+## Complete Payment Flow
 
-### Overview
-The VPS hosts three services:
+### Step 0: Boot Sequence
 
-| Service | Technology | Port | Purpose |
-|---------|-----------|------|---------|
-| **Next.js API** | Next.js 15.1.6 | 3000 | Web dashboard, REST API proxy |
-| **Mosquitto** | Eclipse Mosquitto | 1883/8883 | MQTT broker for ESP32 devices |
-| **MQTT Bridge** | Node.js/TypeScript | N/A | Bridges MQTT events to Supabase |
-
-### VPS Details
-- **Domain:** `api.panamavendingmachines.com` (Next.js API)
-- **MQTT Domain:** `mqtt.panamavendingmachines.com`
-- **Deployment:** Docker containers (via EasyPanel)
-
-### Directory Structure
 ```
-vending-backend/
-├── next-app/          # Next.js web app + API routes
-│   ├── src/
-│   ├── package.json
-│   └── .env           # Supabase credentials
-├── mqtt-bridge/       # MQTT-to-Supabase bridge service
-│   ├── src/
-│   └── package.json
-├── mosquitto/         # MQTT broker configuration
-│   └── Dockerfile
-└── docker/            # Docker compose for deployment
+ESP32 powers on
+    |
+    +--> Load subdomain + passkey from NVS (or Kconfig defaults)
+    +--> Initialize MDB bus (UART on GPIO 4/5)
+    +--> Initialize ILI9488 display (SPI on GPIO 35-41)
+    +--> Connect to WiFi (credentials from NVS)
+    +--> Sync clock via SNTP (pool.ntp.org)
+    +--> Connect to MQTT broker
+    +--> Start Yappy poll task (FreeRTOS, Core 0)
+    +--> Display shows "VMflow" idle screen
+    |
+    +--> MDB: Send RESET, wait for VMC poll
+    +--> MDB: Enter ENABLED state (kiosk mode)
+    +--> MDB: Auto-start session with max funds ($65,535.00)
+         VMC now shows all products as available
 ```
 
-### MQTT Topics
-The ESP32 publishes and subscribes to MQTT topics using its subdomain:
+### Step 1: Customer Selects a Product
 
-| Topic Pattern | Direction | Purpose |
-|---------------|-----------|---------|
-| `vending/{subdomain}/status` | ESP32 -> Cloud | Online/offline LWT |
-| `vending/{subdomain}/telemetry` | ESP32 -> Cloud | Sensor data, PAX count |
-| `vending/{subdomain}/credit/request` | ESP32 -> Cloud | Credit request via MQTT |
-| `vending/{subdomain}/credit/response` | Cloud -> ESP32 | Approved/denied credit |
+The customer presses a button on the vending machine. The VMC sends a **VEND REQUEST** over MDB with the item price and item number.
+
+```
+VMC  --[MDB VEND REQUEST: price=125, item=3]-->  ESP32 (mdb_handler.c)
+```
+
+The MDB handler receives this in `vTaskMdbEvent` (Core 1) and triggers the Yappy flow:
+
+```c
+// mdb_handler.c (simplified)
+case VEND_STATE:
+    // VMC is asking "can this customer pay?"
+    yappy_request_qr(item_price, item_number);  // Starts QR generation
+    // MDB task keeps session alive while Yappy processes
+```
+
+### Step 2: QR Code Generation
+
+**ESP32 side** (`yappy_handler.c`):
+
+1. State transitions: `IDLE -> QR_PENDING`
+2. XOR-encode the price and item number into a 19-byte payload (see Payload Encryption below)
+3. Base64-encode the payload
+4. POST to Edge Function:
+
+```json
+{
+    "action": "generate-qr",
+    "payload": "CgEAfQADAGfWwxK...==",
+    "subdomain": "3"
+}
+```
+
+**Edge Function side** (`index.ts`):
+
+1. Authenticate the request (see Authentication below)
+2. Look up the device in the `embedded` table by subdomain
+3. XOR-decode the payload using the device's passkey to extract price and item number
+4. Get or create a Yappy session token (cached for 6 hours in `yappy_sessions` table)
+5. Call Yappy API: `POST /qr/generate/DYN` with the price
+6. Return the QR hash and transaction ID to ESP32:
+
+```json
+{
+    "qr_hash": "00020101021226570016...",
+    "transaction_id": "TXN-12345-ABCDE",
+    "amount": 1.25
+}
+```
+
+**Back on ESP32:**
+
+7. State transitions: `QR_PENDING -> QR_READY`
+8. Display handler detects the state change (polls every 200ms)
+9. LVGL renders the QR code on the ILI9488 display using `lv_qrcode_update()`
+10. Screen shows: price, item number, QR code, and "Scan with Yappy app"
+
+### Step 3: Customer Scans QR Code
+
+The customer opens the Yappy app on their phone and scans the QR code displayed on the ILI9488 screen. This is entirely between the customer and Yappy -- the ESP32 is not involved in this step.
+
+### Step 4: Payment Status Polling
+
+**ESP32 side:**
+
+State transitions: `QR_READY -> POLLING`
+
+Every 3 seconds, the ESP32 polls the Edge Function:
+
+```json
+{
+    "action": "check-status",
+    "transaction_id": "TXN-12345-ABCDE",
+    "payload": "CgEAfQADAGfWwxK...==",
+    "subdomain": "3"
+}
+```
+
+The `payload` and `subdomain` are included so the Edge Function can decode them for sale recording when payment is confirmed.
+
+**Edge Function side:**
+
+1. Get a valid Yappy session token
+2. Call Yappy API: `GET /transaction/{transaction_id}`
+3. Check the status field against known "paid" statuses:
+   - `PAGADO`, `EJECUTADO`, `COMPLETADO`, `APROBADO` (Spanish)
+   - `PAID`, `COMPLETED`, `APPROVED` (English)
+4. Log every check to `yappy_debug_log` table for debugging
+5. If NOT paid: return current status to ESP32
+6. If PAID: proceed to payment confirmation (Step 5)
+
+**Timeout:** If 5 minutes pass without payment, the ESP32 cancels the transaction and denies the vend.
+
+### Step 5: Payment Confirmed
+
+When the Edge Function detects `PAGADO`:
+
+1. XOR-decode the payload to extract price and item number
+2. Insert a sale record into the `sales` table:
+   ```
+   embedded_id, item_price, item_number, channel="yappy", external_transaction_id
+   ```
+3. Re-encrypt the payload with command `0x03` (APPROVE_VEND) for the MQTT credit push
+4. Call VPS MQTT endpoint to push credit to the ESP32 (fallback mechanism)
+5. Return `{ "status": "PAGADO" }` to the ESP32
+
+**Back on ESP32:**
+
+1. `check_payment_status()` returns `true`
+2. State transitions: `POLLING -> PAID`
+3. **Critical line:** `vend_approved_todo = true` -- this flag tells the MDB task to send **VEND APPROVED** to the VMC
+4. Display shows green checkmark + "Payment Confirmed!" + "Dispensing..."
+5. The VMC dispenses the product
+
+```
+ESP32 (yappy_handler.c)  --[vend_approved_todo = true]-->  ESP32 (mdb_handler.c)
+                                                                    |
+ESP32 (mdb_handler.c)  --[MDB VEND APPROVED]-->  VMC  -->  DISPENSE PRODUCT
+```
+
+### Step 6: Cleanup
+
+After 5 seconds of showing the success screen:
+
+1. State transitions: `PAID -> IDLE`
+2. Display returns to idle screen ("Select a product")
+3. QR hash, transaction ID, and error message are cleared
+4. MDB session restarts (kiosk mode auto-begins new session)
 
 ---
 
-## 6. Supabase (Cloud Backend)
+## Cancellation Flow
 
-### Project Details
-- **Project ID:** `luntgcliwnyvrmrqpdts`
-- **URL:** `https://luntgcliwnyvrmrqpdts.supabase.co`
-- **Region:** (Supabase managed)
-- **Plan:** Free tier
+If the customer walks away or the machine operator cancels:
 
-### Anon Key
-```
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1bnRnY2xpd255dnJtcnFwZHRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMDA2MzEsImV4cCI6MjA4ODY3NjYzMX0.s5mBlh0YTXi2xhfd1vOX_R9Aof6S6D5ZXc8zK_G7074
-```
-
-### Auth Users
-| Email | User ID | Status |
-|-------|---------|--------|
-| `salomonco@gmail.com` | `f29e91b9-...` | Confirmed |
-| `salomonco+1@gmail.com` | `be8bedb3-90c1-4688-81ca-ab4971799906` | Confirmed, Active |
-
-### Edge Functions
-
-| Function | Slug | JWT Verification | Status |
-|----------|------|------------------|--------|
-| **request-credit** | `request-credit` | Manual (verify_jwt=false) | Active (v2) |
-
-The `request-credit` function handles the BLE vending payment flow:
-1. Verifies user JWT via `supabase.auth.getUser()`
-2. Decodes Base64 BLE payload
-3. Looks up device passkey from `embedded` table (using service role)
-4. XOR-decrypts and validates checksum + timestamp
-5. Inserts sale record into `sales` table (using service role)
-6. Re-encrypts payload with CMD_APPROVE_VEND (0x03)
-7. Returns Base64-encoded approval payload + sale ID
-
-**Important:** Originally deployed with `verify_jwt: true`, which caused persistent 401 errors because the Supabase gateway rejected valid user JWTs. Redeployed as v2 with `verify_jwt: false` and manual auth inside the function. The function now uses the service role key for database operations to bypass RLS.
-
-### RLS (Row Level Security)
-All public tables have RLS enabled. Policies filter by `owner_id = auth.uid()`, meaning users can only see their own data. The Edge Function uses the service role key to bypass RLS for inserts.
+1. **ESP32 calls `yappy_cancel()`**
+2. Edge Function: `PUT /transaction/{transaction_id}` on Yappy API
+3. State resets to `IDLE`
+4. MDB: `vend_denied_todo = true` -- tells VMC the payment was denied
+5. Display returns to idle
 
 ---
 
-## 7. BLE Communication Protocol
+## Payload Encryption (XOR Crypto)
 
-### Payload Format
-All BLE communication uses a **19-byte XOR-encrypted payload**:
+All communication between ESP32 and Edge Function includes a **19-byte XOR-encrypted payload** that carries the vend request data. This ensures the price and item number cannot be tampered with in transit (beyond TLS).
+
+### Payload Layout (19 bytes)
 
 ```
-Byte Layout (19 bytes total):
-[CMD(1)] [VER(1)] [ITEM_PRICE(4,u32BE)] [ITEM_NUM(2,u16BE)] [TIMESTAMP(4,i32BE)] [PAX_COUNT(2,u16BE)] [RANDOM(4)] [CHK(1)]
-
-Encryption:
-- Byte 0 (CMD): Unencrypted
-- Bytes 1-18: XOR'd with 18-byte device passkey
-- Byte 18 (CHK): Checksum = sum of bytes 0-17 & 0xFF (computed before encryption)
+Byte 0       : CMD         (command opcode, NOT encrypted)
+Byte 1       : VER         (protocol version, always 0x01)
+Bytes 2-5    : ITEM_PRICE  (uint32, big-endian)
+Bytes 6-7    : ITEM_NUMBER (uint16, big-endian)
+Bytes 8-11   : TIMESTAMP   (int32, big-endian, Unix seconds)
+Bytes 12-13  : PAX_COUNT   (uint16, big-endian, unused for Yappy)
+Bytes 14-17  : RANDOM      (random padding from esp_fill_random)
+Byte 18      : CHECKSUM    (sum of bytes 0-17, lower 8 bits)
 ```
 
-### Command Bytes (App -> ESP32)
+### Encryption Steps (ESP32 -> Edge Function)
 
-| Byte | Name | Description |
-|------|------|-------------|
-| 0x00 | SET_SUBDOMAIN | Write device subdomain ID |
-| 0x01 | SET_PASSKEY | Write 18-char encryption key |
-| 0x02 | BEGIN_SESSION | Start a vending session |
-| 0x03 | APPROVE_VEND | Approve product dispensing |
-| 0x04 | CLOSE_SESSION | End the vending session |
-| 0x06 | SET_WIFI_SSID | Write WiFi network name |
-| 0x07 | SET_WIFI_PASS | Write WiFi password |
+1. Fill bytes 1-17 with cryptographic random data (`esp_fill_random`)
+2. Overwrite structured fields (VER, PRICE, ITEM, TIMESTAMP, PAX)
+3. Compute checksum: `sum(bytes[0..17]) & 0xFF` -> byte 18
+4. XOR bytes 1-18 with the device's 18-byte passkey
+5. Base64-encode the result for JSON transport
 
-### Event Bytes (ESP32 -> App via BLE Notifications)
+### Decryption Steps (Edge Function)
 
-| Byte | Name | Description |
-|------|------|-------------|
-| 0x0A | VEND_REQUEST | Product selected, contains price + item number |
-| 0x0B | VEND_SUCCESS | Product dispensed successfully |
-| 0x0C | VEND_FAILURE | Dispensing failed |
-| 0x0D | SESSION_COMPLETE | Session ended by machine |
+1. Base64-decode the payload string
+2. Look up the device's passkey from `embedded` table by subdomain
+3. XOR bytes 1-18 with the passkey (undoes encryption)
+4. Verify checksum matches
+5. Extract price and item number
 
-### Price Format
-- Raw value in the payload is in **cents** (e.g., 150 = $1.50)
-- `displayPrice = itemPrice / 100.0`
-- Scale factor: 1, Decimal places: 2
+### Security Properties
 
-### XOR Encryption/Decryption
-```
-Encrypt:
-1. Set command byte (byte 0)
-2. Fill data fields (bytes 1-17)
-3. Compute checksum: sum bytes 0-17, mask with 0xFF, store in byte 18
-4. XOR bytes 1-18 with passkey characters
-
-Decrypt:
-1. XOR bytes 1-18 with passkey characters (reverse the encryption)
-2. Validate checksum: sum bytes 0-17, compare with byte 18
-3. Validate timestamp: must be within 8 seconds of current time
-4. Extract fields from decrypted bytes
-```
+- **Per-device passkey:** Each ESP32 has a unique 18-byte passkey auto-generated at registration (`SUBSTRING(md5(random()), 1, 18)`)
+- **Timestamp validation:** ESP32-side decryption rejects payloads older than 8 seconds (replay protection)
+- **Random padding:** Bytes 14-17 are random, making it harder to recover the passkey from captured payloads
+- **Transport encryption:** The entire payload is additionally protected by TLS 1.2/1.3 over HTTPS
 
 ---
 
-## 8. Vending Flow (End-to-End)
+## Authentication Layers
 
-### Step-by-Step Flow
+The system uses five layers of authentication/validation between the ESP32 and the Yappy API:
 
-```
-1. USER opens app, logs in
-   └─ App: POST /auth/v1/token -> gets access_token + refresh_token
+### Layer 1: TLS Certificate Verification
 
-2. USER taps "Scan" on VendingScreen
-   └─ App: BLE scan for devices advertising VMflow service UUID
-   └─ ESP32: BLE advertising with name "VMflow-{subdomain}"
+All HTTPS calls from ESP32 to Supabase are verified against an embedded **GTS Root R4** certificate (Google Trust Services ECDSA root). This is pinned in firmware rather than using the full ESP-IDF cert bundle because the bundle is missing the GlobalSign cross-signer that Supabase's chain requires.
 
-3. USER selects a device from the list
-   └─ App: Fetches device passkey from GET /rest/v1/embedded
-   └─ App: BLE connect to device
-   └─ App: Writes BEGIN_SESSION (0x02) to BLE characteristic
-   └─ ESP32: Sends MDB BEGIN_SESSION to vending machine
+### Layer 2: Supabase API Key (`apikey` header)
 
-4. USER selects a product ON THE VENDING MACHINE (physical button press)
-   └─ Vending Machine: Sends MDB VEND_REQUEST to ESP32
-   └─ ESP32: Creates 19-byte XOR-encrypted payload with price + item number
-   └─ ESP32: Sends BLE notification (0x0A) to app
+Every Edge Function call includes the project's **anon key** in the `apikey` header. This identifies the request as coming from an authorized client of this Supabase project. The anon key is baked into firmware via Kconfig.
 
-5. APP receives notification, decrypts locally with stored passkey
-   └─ App: Shows "Product Selected" screen with price and item number
-   └─ App: User sees "Item #3 - $1.50" and "Send Payment" button
+### Layer 3: Device Authentication (`x-device-key` header)
 
-6. USER taps "Send Payment"
-   └─ App: Base64-encodes the raw BLE payload
-   └─ App: POST /functions/v1/request-credit with {payload, subdomain}
-   └─ Edge Function: Decrypts, validates, records sale, re-encrypts with 0x03
-   └─ App: Receives approval payload
-
-7. APP writes approval payload to BLE characteristic
-   └─ ESP32: Decrypts, sends MDB APPROVE_VEND to vending machine
-   └─ Vending Machine: Dispenses product
-
-8. ESP32 sends BLE notification:
-   └─ 0x0B (VEND_SUCCESS): App shows "Success!"
-   └─ 0x0C (VEND_FAILURE): App shows "Failed"
-   └─ 0x0D (SESSION_COMPLETE): App disconnects and resets
-```
-
-### Sequence Diagram
+The ESP32 sends a shared secret in the `x-device-key` HTTP header. The Edge Function compares this against the `ESP32_DEVICE_KEY` environment variable.
 
 ```
-  App              ESP32            Vending Machine      Supabase
-   |                 |                    |                  |
-   |--BLE Connect--->|                    |                  |
-   |--0x02 Session-->|                    |                  |
-   |                 |--MDB Session------>|                  |
-   |                 |                    |                  |
-   |                 |   [User presses button on machine]   |
-   |                 |                    |                  |
-   |                 |<--MDB VendReq------|                  |
-   |<-0x0A Notif-----|                    |                  |
-   |                 |                    |                  |
-   |  [Shows price, user taps "Send"]    |                  |
-   |                 |                    |                  |
-   |---POST /request-credit----------------------------->|  |
-   |<--{approval payload, sales_id}----------------------|  |
-   |                 |                    |                  |
-   |--0x03 Approve-->|                    |                  |
-   |                 |--MDB Approve------>|                  |
-   |                 |                    |--Dispense------->|
-   |                 |<--MDB Success------|                  |
-   |<-0x0B Success---|                    |                  |
-   |                 |                    |                  |
-   |<-0x0D Complete--|                    |                  |
-   |--Disconnect---->|                    |                  |
+ESP32 sends:    x-device-key: <shared-secret>
+Server checks:  Deno.env.get("ESP32_DEVICE_KEY") === deviceKey
 ```
+
+This replaces Supabase JWT authentication (which would require user login on the ESP32). The Edge Function sets `userId = "__device__"` for device-authenticated requests and resolves the actual owner from the `embedded` table when recording sales.
+
+### Layer 4: XOR Payload Validation
+
+Even after authentication, the Edge Function XOR-decrypts the payload using the device's passkey from the database. If the passkey is wrong, decryption produces garbage (checksum will fail). This proves the request came from the specific registered device, not just any device with the shared key.
+
+### Layer 5: Yappy API Authentication
+
+The Edge Function authenticates with Yappy using three credentials stored as Supabase secrets:
+
+| Secret | Purpose |
+|--------|---------|
+| `YAPPY_API_KEY` | Identifies the merchant account |
+| `YAPPY_SECRET_KEY` | Proves ownership of the merchant account |
+| `YAPPY_BASE_URL` | Yappy API endpoint |
+
+A **device session token** is obtained by calling `POST /session/device` and is cached in the `yappy_sessions` table for 6 hours to avoid re-authentication on every QR generation.
 
 ---
 
-## 9. Infrastructure & Domains
+## Database Schema
 
-### Active Domains & Services
+### `embedded` (Device Registry)
 
-| Domain | Service | Status |
-|--------|---------|--------|
-| `luntgcliwnyvrmrqpdts.supabase.co` | Supabase (DB, Auth, Edge Functions) | Active |
-| `api.panamavendingmachines.com` | Next.js API (VPS) | Active |
-| `mqtt.panamavendingmachines.com` | Mosquitto MQTT Broker (VPS) | Active |
-| `vmflow.xyz` | Main website | Active |
-| `vmflow.xyz/dashboard` | Web dashboard | Active |
-| `install.vmflow.xyz` | ESP32 Web Installer (ESP Web Tools) | Active |
+Each ESP32 board is registered here. The `subdomain` is the device's unique identifier, and the `passkey` is used for XOR payload encryption/decryption.
 
-### VPS Deployment
-- **Platform:** EasyPanel (Docker-based PaaS)
-- **Services deployed via Docker:**
-  - Next.js API container
-  - Mosquitto MQTT broker container
-  - MQTT Bridge container
-
-### Required Open Ports
-
-| Port | Protocol | Service | Direction | Notes |
-|------|----------|---------|-----------|-------|
-| 443 | TCP | Next.js API (via Caddy/reverse proxy) | Inbound | HTTPS API traffic |
-| 1883 | TCP | Mosquitto MQTT Broker | Inbound | **CRITICAL:** Must be open for ESP32 devices to connect. Without this port open, devices cannot report status (online/offline), publish cash sales, or receive remote commands. Open this port in both the VPS hosting provider's firewall (e.g. Hostinger firewall panel) and the OS-level firewall (e.g. `ufw allow 1883/tcp`). |
-
-### Supabase Configuration
-- **Project URL:** `https://luntgcliwnyvrmrqpdts.supabase.co`
-- **Auth:** GoTrue (email/password)
-- **Database:** PostgreSQL (managed)
-- **Edge Functions:** Deno runtime
-- **Storage:** Not currently used
-
----
-
-## 10. Database Schema
-
-### Enums
-
-| Enum | Values | Usage |
-|------|--------|-------|
-| `embedded_status` | `online`, `offline` | Device status via MQTT LWT |
-| `metric_name` | `paxcounter` | Telemetry metric types |
-| `sale_channel` | `ble`, `mqtt`, `cash` | How the sale was initiated |
-| `metric_unit` | `-` | Metric measurement units |
-
-### Tables
-
-#### `embedded` (ESP32 Devices)
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | uuid (PK) | Auto-generated |
-| `owner_id` | uuid (FK -> auth.users) | Device owner, auto-set via `auth.uid()` |
-| `subdomain` | bigint (identity) | Auto-incrementing device ID |
-| `mac_address` | text | BLE MAC address (e.g., "1C:DB:D4:78:51:56") |
-| `passkey` | text | 18-char XOR key, auto-generated from `md5(random())` |
-| `status` | embedded_status | online/offline (updated by MQTT LWT) |
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | uuid (PK) | Primary key |
+| `subdomain` | bigint (identity) | Unique device ID (auto-increment) |
+| `passkey` | text | 18-char XOR key (auto-generated: `md5(random())[1:18]`) |
+| `owner_id` | uuid (FK auth.users) | Device owner |
+| `machine_id` | uuid (FK machines) | Link to physical machine (nullable) |
+| `mac_address` | text | ESP32 MAC address |
+| `status` | enum | `online` or `offline` |
 | `status_at` | timestamptz | Last status change |
-| `machine_id` | uuid (FK -> machines) | Optional link to physical machine |
 
-**Current data:** 1 device (subdomain=2, mac=1C:DB:D4:78:51:56)
+### `sales` (Transaction Records)
 
-#### `sales` (Transactions)
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | uuid (PK) | Auto-generated |
-| `embedded_id` | uuid (FK -> embedded) | Which device processed the sale |
-| `machine_id` | uuid (FK -> machines) | Optional: which machine |
-| `product_id` | uuid (FK -> products) | Optional: which product |
-| `item_price` | double precision | Price in dollars (e.g., 1.50) |
-| `item_number` | bigint | Item slot number on the machine |
-| `channel` | sale_channel | ble, mqtt, or cash |
-| `owner_id` | uuid (FK -> auth.users) | Device owner, auto-set |
-| `lat` / `lng` | double precision | GPS coordinates (optional) |
+Every completed payment creates a row here. The Edge Function inserts this automatically when Yappy reports `PAGADO`.
 
-**Current data:** 0 records (was broken due to 401 bug, now fixed)
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | uuid (PK) | Primary key |
+| `embedded_id` | uuid (FK embedded) | Which device processed the sale |
+| `item_price` | float8 | Price in dollars (e.g., 1.25) |
+| `item_number` | bigint | Slot/item number on the machine |
+| `channel` | enum | `ble`, `mqtt`, `cash`, or `yappy` |
+| `owner_id` | uuid | Resolved from `embedded.owner_id` for device auth |
+| `external_transaction_id` | text | Yappy transaction ID |
+| `lat`, `lng` | float8 | GPS coordinates (nullable, unused by ESP32) |
+| `machine_id` | uuid (FK machines) | Physical machine (nullable) |
+| `product_id` | uuid (FK products) | Product record (nullable) |
 
-#### Other Tables
-- `machines` - Physical vending machines (name, serial_number, owner)
-- `machine_models` - Machine type templates
-- `model_coils` - Slot definitions per model
-- `machine_coils` - Inventory per machine slot
-- `products` - Items sold (name, barcode)
-- `payments` - Placeholder for payment provider integration
-- `metrics` - Time-series telemetry data (partitioned by year)
+### `yappy_sessions` (Token Cache)
 
----
+Yappy session tokens are cached here for 6 hours to avoid re-authenticating on every API call.
 
-## 11. Current Status & Known Issues
+| Column | Type | Purpose |
+|--------|------|---------|
+| `token` | text | Yappy API session token |
+| `expires_at` | timestamptz | Expiration time (created_at + 6 hours) |
 
-### What's Working
-- [x] ESP32-S3 firmware compiles and runs (ESP-IDF v6.1)
-- [x] BLE advertising with VMflow service UUID
-- [x] BLE provisioning (subdomain, passkey, WiFi via app)
-- [x] MDB protocol communication with vending machine
-- [x] Android app: login, register, device management
-- [x] Android app: BLE scan, connect, start session
-- [x] Android app: receive vend request, show price + item number
-- [x] Android app: manual "Send Payment" approval button
-- [x] Supabase: auth, device CRUD, Edge Function deployed
-- [x] Edge Function: XOR decrypt, validate, record sale, re-encrypt
-- [x] VPS: Mosquitto MQTT broker running
-- [x] VPS: Next.js API running
+### `yappy_debug_log` (Debug Logging)
 
-### Recently Fixed
-- **BLE UUID byte order** - NimBLE's `BLE_UUID128_INIT` requires reversed (little-endian) byte order
-- **Provisioning error handling** - Added `executeWithRetry` for 401 token refresh
-- **Vending flow** - Added local XOR decryption and manual "Send" button
-- **Edge Function 401** - Redeployed with `verify_jwt: false` and manual auth (the gateway was rejecting valid JWTs)
+Every `check-status` call logs the raw Yappy API response here for debugging.
 
-### Pending Verification
-- [ ] Sales recording in Supabase (Edge Function was redeployed, needs re-test)
-- [ ] MQTT-based credit flow (alternative to BLE)
-- [ ] PAX counter telemetry via MQTT
-
-### Known Issues
-1. **Sales table is empty** - The `request-credit` Edge Function was returning 401 for all requests due to `verify_jwt: true` gateway issue. Redeployed as v2 with manual auth. Needs re-testing.
-2. **MockPaymentProvider** - The app uses a mock payment provider. Real payment integration (Stripe, Square, etc.) is not yet implemented.
-3. **No GPS data** - The credit request currently sends `lat=null, lng=null`. GPS permission and location retrieval not yet implemented.
-4. **Timestamp window** - The XOR payload timestamp must be within 8 seconds of server time. ESP32 and server clocks must be synchronized (ESP32 gets time via NTP over WiFi).
+| Column | Type | Purpose |
+|--------|------|---------|
+| `transaction_id` | text | Yappy transaction ID |
+| `raw_response` | jsonb | Full Yappy API response body |
+| `extracted_status` | text | Normalized status string (e.g., "PAGADO") |
+| `action` | text | Which Edge Function action triggered this log |
 
 ---
 
-## 12. Development Environment Setup
+## State Machine
 
-### Prerequisites
-| Tool | Version | Path |
-|------|---------|------|
-| ESP-IDF | v6.1 | `/Users/salomoncohen/esp/esp-idf` |
-| Python | 3.10+ | `/usr/local/bin/python3` |
-| Android SDK | Latest | `~/Library/Android/sdk` |
-| ADB | Latest | `~/Library/Android/sdk/platform-tools/adb` |
-| JDK | 17 | System default |
-| Node.js | 18+ | System default |
+The Yappy payment handler runs as a FreeRTOS task (`vTaskYappyPoll`) that loops forever, checking the current state and taking action:
 
-### Environment Variables
-```bash
-# ESP-IDF
-export IDF_PATH="/Users/salomoncohen/esp/esp-idf"
-export PATH="/usr/local/bin:$PATH"
-source $IDF_PATH/export.sh
-
-# Android
-export ANDROID_HOME=~/Library/Android/sdk
+```
+                    VEND_REQUEST from MDB
+                           |
+                           v
+    +------+         +-----------+         +----------+
+    | IDLE | ------> | QR_PENDING| ------> | QR_READY |
+    +------+         +-----------+         +----------+
+       ^                   |                     |
+       |              (API fail)           (start polling)
+       |                   |                     |
+       |                   v                     v
+       |              +---------+           +---------+
+       +<----(5s)---- | ERROR   |           | POLLING | ---(every 3s)--+
+       |              +---------+           +---------+                |
+       |                   ^                     |                     |
+       |                   |                (PAGADO!)                  |
+       |              (5min timeout)             |                     |
+       |                                         v                     |
+       |                                    +--------+                |
+       +<-----------(5s)------------------- | PAID   |                |
+                                            +--------+                |
+                                                                      |
+                                                  (not paid)----------+
 ```
 
-### Hardware
-- **ESP32-S3** connected via USB at `/dev/cu.usbmodem14201`
-- **Samsung phone** (device ID: `RFCY7060K9Z`) connected via USB
+| State | Duration | Display Shows | Action |
+|-------|----------|---------------|--------|
+| `IDLE` | Indefinite | "VMflow" logo + "Select a product" | Sleep 500ms |
+| `QR_PENDING` | ~1-3s | Spinner / "Generating..." | POST generate-qr to Edge Function |
+| `QR_READY` | Instant | Price + QR code + "Scan with Yappy" | Transition to POLLING |
+| `POLLING` | Up to 5 min | Same as QR_READY | GET check-status every 3s |
+| `PAID` | 5s | Green checkmark + "Payment Confirmed!" | `vend_approved_todo = true` |
+| `ERROR` | 5s | Warning icon + error message | `vend_denied_todo = true` |
 
-### Quick Commands
+---
 
-```bash
-# Build and flash ESP32
-cd vending-esp32 && idf.py build && idf.py -p /dev/cu.usbmodem14201 flash monitor
+## MDB Integration
 
-# Build and install Android app
-cd vending-app && ./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+The ESP32 communicates with the vending machine controller (VMC) over the **MDB bus** (Multi-Drop Bus), a 9-bit UART protocol at 9600 baud.
 
-# Monitor Android logs
-adb logcat -s VendingViewModel:D BleManager:D
+### Kiosk Mode
 
-# Clear app data (force fresh login)
-adb shell pm clear xyz.vmflow.vending
+The ESP32 operates as a **Level 1 cashless peripheral** in kiosk mode:
 
-# Check Supabase Edge Function logs
-# Use Supabase MCP tool: get_logs(project_id="luntgcliwnyvrmrqpdts", service="edge-function")
+- On ENABLE: auto-starts a session with maximum funds ($65,535.00)
+- Customer sees all products as available (the machine thinks a credit card is inserted)
+- On VEND REQUEST: the ESP32 decides whether to approve based on Yappy payment status
+- On VEND APPROVED: the machine dispenses the product
+- On VEND DENIED: the machine cancels and returns to idle
+
+### MDB-Yappy Coordination Flags
+
+The MDB task (Core 1) and Yappy task (Core 0) communicate through shared volatile flags defined in `config.h`:
+
+| Flag | Set by | Read by | Purpose |
+|------|--------|---------|---------|
+| `vend_approved_todo` | Yappy handler | MDB handler | Approve vend after Yappy payment |
+| `vend_denied_todo` | Yappy handler | MDB handler | Deny vend on cancel/timeout/error |
+| `session_timer_reset_todo` | Yappy handler | MDB handler | Keep MDB session alive while polling |
+
+### Session Keep-Alive
+
+MDB sessions have a configurable timeout (typically 30-60 seconds). Since Yappy payments can take up to 5 minutes, the Yappy handler sets `session_timer_reset_todo = true` every polling cycle. The MDB handler resets the session timer when it sees this flag, preventing the VMC from timing out the session.
+
+---
+
+## Network Topology
+
+```
+ESP32 (STA mode)
+    |
+    +--[WiFi]--> Router --> Internet
+    |                          |
+    |                     +----+----+
+    |                     |         |
+    |                Supabase    Yappy API
+    |              (us-east-1)  (Panama)
+    |
+    +--[SoftAP: "VMflow"]--> Phone/laptop for configuration
+    |                         http://192.168.4.1/
+    |
+    +--[SPI bus]--> ILI9488 display (QR codes, status)
+    |
+    +--[MDB UART]--> Vending machine controller
+    |
+    +--[MQTT]--> VPS broker (telemetry, remote credit push)
+```
+
+**WiFi:** The ESP32 runs in dual mode -- STA (station) connects to the venue's WiFi for internet access, while SoftAP ("VMflow") always broadcasts for configuration access. Only the configuration endpoints are served on the SoftAP; all Yappy traffic goes through the STA connection.
+
+**Configuration:** Any device can connect to the "VMflow" WiFi network and navigate to `http://192.168.4.1/` to configure WiFi credentials, MQTT settings, and device parameters.
+
+---
+
+## Error Handling
+
+### ESP32 Errors
+
+| Error | State Transition | Recovery |
+|-------|-----------------|----------|
+| WiFi not connected | Stays IDLE | Yappy handler checks `wifi_sta_connected` before any HTTP call |
+| Edge Function HTTP error | QR_PENDING -> ERROR | Shows error for 5s, returns to IDLE |
+| JSON parse failure | QR_PENDING -> ERROR | Shows "Failed to generate QR code" |
+| Clock not synced | Blocks up to 15s | SNTP wait loop before HTTPS call (TLS needs correct time) |
+| Polling timeout (5 min) | POLLING -> ERROR | Cancels transaction on Yappy, denies vend |
+| Payment confirmed but not in VEND_STATE | Logs warning | Sale is still recorded server-side |
+
+### Edge Function Errors
+
+| Error | HTTP Status | Response |
+|-------|------------|----------|
+| Missing authentication | 401 | `{ "error": "Missing authentication" }` |
+| Invalid device key | 401 | `{ "error": "Invalid device key" }` |
+| Device not found by subdomain | 404 | `{ "error": "Device not found" }` |
+| Payload decode failure | 400 | `{ "error": "Failed to decode payload" }` |
+| Yappy API failure | 502 | `{ "error": "Yappy QR generation failed", "details": {...} }` |
+| Sale insert failure | 500 | `{ "error": "..." }` |
+
+### MQTT Credit Push (Fallback)
+
+When Yappy payment is confirmed, the Edge Function also attempts to push credit to the ESP32 via MQTT through the VPS. This is a **fallback mechanism** -- the primary dispense path is the direct `vend_approved_todo` flag set by the ESP32's own polling. The MQTT push is non-fatal; if it fails, the sale is still recorded and the ESP32 has already approved the vend.
+
+---
+
+## Sequence Diagram (Full Flow)
+
+```
+  Customer           Vending Machine        ESP32                  Edge Function           Yappy API
+     |                     |                  |                         |                      |
+     |--[press button]--->|                   |                         |                      |
+     |                     |--MDB VEND_REQ-->|                         |                      |
+     |                     |                  |                         |                      |
+     |                     |                  |--POST generate-qr---->|                      |
+     |                     |                  |                         |--POST /session/device->|
+     |                     |                  |                         |<--{token}------------|
+     |                     |                  |                         |                      |
+     |                     |                  |                         |--POST /qr/generate/DYN->|
+     |                     |                  |                         |<--{hash, txn_id}-----|
+     |                     |                  |<--{qr_hash, txn_id}---|                      |
+     |                     |                  |                         |                      |
+     |                     |                  |--[display QR on        |                      |
+     |                     |                  |   ILI9488 screen]      |                      |
+     |                     |                  |                         |                      |
+     |--[scan QR with Yappy app]-------------------------------------------[pay in Yappy]-->|
+     |                     |                  |                         |                      |
+     |                     |                  |--POST check-status---->|                      |
+     |                     |                  |                         |--GET /transaction/-->|
+     |                     |                  |                         |<--{PENDIENTE}--------|
+     |                     |                  |<--{status: PENDIENTE}--|                      |
+     |                     |                  |                         |                      |
+     |                     |                  |  ... (every 3 seconds)  |                      |
+     |                     |                  |                         |                      |
+     |                     |                  |--POST check-status---->|                      |
+     |                     |                  |                         |--GET /transaction/-->|
+     |                     |                  |                         |<--{PAGADO}-----------|
+     |                     |                  |                         |                      |
+     |                     |                  |                         |--INSERT INTO sales---|
+     |                     |                  |                         |                      |
+     |                     |                  |<--{status: PAGADO}----|                      |
+     |                     |                  |                         |                      |
+     |                     |                  |--[vend_approved=true]  |                      |
+     |                     |<-MDB VEND_APPR--|                         |                      |
+     |                     |                  |                         |                      |
+     |<--[product dispensed]|                  |                         |                      |
+     |                     |                  |                         |                      |
+     |                     |                  |--[display: "Payment    |                      |
+     |                     |                  |   Confirmed!"]         |                      |
+     |                     |                  |                         |                      |
+     |                     |                  |--[5s delay, back to    |                      |
+     |                     |                  |   IDLE screen]         |                      |
 ```
 
 ---
 
-## 13. Key File Reference
+## Environment Variables
 
-### ESP32 Firmware
-| File | Path | Purpose |
-|------|------|---------|
-| Main entry | `vending-esp32/main/main.c` | App start, task init |
-| BLE handler | `vending-esp32/main/ble_handler.c` | GATT server, provisioning |
-| MDB handler | `vending-esp32/main/mdb_handler.c` | MDB protocol |
-| XOR crypto | `vending-esp32/main/xor_crypto.c` | Payload encryption |
-| Config | `vending-esp32/main/config.h` | Constants |
+### ESP32 Firmware (Kconfig / NVS)
 
-### Android App
-| File | Path | Purpose |
-|------|------|---------|
-| DI Module | `app/.../di/AppModule.kt` | Koin dependency graph |
-| API Config | `app/.../data/remote/ApiClient.kt` | URLs, keys, HTTP client |
-| Auth Repo | `app/.../data/repository/AuthRepository.kt` | Login, register, tokens |
-| Device Repo | `app/.../data/repository/DeviceRepository.kt` | Device CRUD |
-| Vending Repo | `app/.../data/repository/VendingRepository.kt` | Credit request |
-| Sales Repo | `app/.../data/repository/SalesRepository.kt` | Sales history |
-| BLE Manager | `app/.../bluetooth/BleManager.kt` | Kable BLE operations |
-| XOR Crypto | `app/.../bluetooth/XorCrypto.kt` | Payload encrypt/decrypt |
-| BLE Constants | `app/.../bluetooth/BleConstants.kt` | UUIDs, commands, events |
-| Vend Request | `app/.../domain/model/VendRequest.kt` | Decoded payload model |
-| Vending VM | `app/.../ui/vending/VendingViewModel.kt` | Core state machine |
-| Vending UI | `app/.../ui/vending/VendingScreen.kt` | Vending flow screens |
+| Variable | Source | Purpose |
+|----------|--------|---------|
+| `CONFIG_SUPABASE_URL` | Kconfig | Supabase project URL |
+| `CONFIG_SUPABASE_ANON_KEY` | Kconfig | Supabase public API key |
+| `CONFIG_ESP32_DEVICE_KEY` | Kconfig | Shared secret for device auth |
+| `CONFIG_MDB_SCALE_FACTOR` | Kconfig | MDB price multiplier (default: 1) |
+| `CONFIG_MDB_DECIMAL_PLACES` | Kconfig | MDB price decimal places (default: 2) |
+| `my_subdomain` | NVS (or Kconfig default) | Device identifier for Edge Function |
+| `my_passkey` | NVS (or Kconfig default) | 18-byte XOR encryption key |
 
-### Supabase
-| File | Path | Purpose |
-|------|------|---------|
-| Migration | `supabase/migrations/20260309000000_initial_schema.sql` | DB schema |
-| Edge Fn | `supabase/functions/request-credit/index.ts` | Credit request handler |
-| Config | `supabase/config.toml` | Local dev config |
+### Supabase Edge Function (Secrets)
 
-### Backend (VPS)
-| File | Path | Purpose |
-|------|------|---------|
-| Next.js App | `vending-backend/next-app/` | Web dashboard + API |
-| MQTT Bridge | `vending-backend/mqtt-bridge/` | MQTT-Supabase sync |
-| Mosquitto | `vending-backend/mosquitto/` | MQTT broker config |
+| Secret | Purpose |
+|--------|---------|
+| `SUPABASE_URL` | Auto-injected by Supabase |
+| `SUPABASE_ANON_KEY` | Auto-injected by Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | Auto-injected, bypasses RLS |
+| `ESP32_DEVICE_KEY` | Shared secret (must match firmware) |
+| `YAPPY_BASE_URL` | Yappy API base URL |
+| `YAPPY_API_KEY` | Yappy merchant API key |
+| `YAPPY_SECRET_KEY` | Yappy merchant secret key |
+| `YAPPY_ID_DEVICE` | Yappy device registration ID |
+| `YAPPY_NAME_DEVICE` | Yappy device name |
+| `YAPPY_USER_DEVICE` | Yappy device user |
+| `YAPPY_ID_GROUP` | Yappy merchant group ID |
+| `VPS_BASE_URL` | VPS URL for MQTT credit push fallback |
+
+---
+
+## Task Layout (FreeRTOS)
+
+| Task | Core | Priority | Stack | Purpose |
+|------|------|----------|-------|---------|
+| `vTaskMdbEvent` | 1 | 1 | 4096 | MDB bus protocol (timing-critical) |
+| `vTaskBitEvent` | 0 | 1 | 2048 | LED + buzzer status indicators |
+| `vTaskYappyPoll` | 0 | 1 | 6144 | Yappy payment state machine |
+| `vTaskDisplayUpdate` | 0 | 2 | 4096 | Polls yappy state, updates LVGL widgets |
+| LVGL port (auto) | 0 | 2 | 4096 | Runs lv_timer_handler(), SPI DMA transfers |
+
+---
+
+## Device Provisioning
+
+To register a new ESP32 device:
+
+1. Insert a row in the `embedded` table (subdomain auto-increments, passkey auto-generates)
+2. Flash the firmware with matching `subdomain` and `passkey` in Kconfig defaults (or write via BLE/NVS)
+3. Configure WiFi credentials via the SoftAP web UI at `http://192.168.4.1/`
+4. The device connects to WiFi, syncs time, and is ready to process payments
+
+The `subdomain` ties the ESP32 to its database record. The `passkey` ensures only that specific device can generate valid XOR payloads that the Edge Function will accept.

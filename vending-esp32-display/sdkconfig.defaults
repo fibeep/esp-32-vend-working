@@ -1,0 +1,58 @@
+# ------------------------------------------------------------------
+# sdkconfig.defaults - Default SDK configuration for vending-esp32
+# ------------------------------------------------------------------
+# These values are applied when building without an existing sdkconfig.
+# Run `idf.py menuconfig` to customize further.
+# ------------------------------------------------------------------
+
+# Target: ESP32-S3
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash size: 16MB (ESP32-S3-N16R8)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Partition table: custom (3MB per OTA slot for LVGL binary)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ------------------------------------------------------------------
+# Bluetooth: DISABLED to free internal RAM for display + WiFi
+# ------------------------------------------------------------------
+# CONFIG_BT_ENABLED=y
+
+# MQTT
+CONFIG_MQTT_PROTOCOL_311=y
+CONFIG_MQTT_TRANSPORT_SSL=y
+CONFIG_MQTT_TRANSPORT_WEBSOCKET=y
+CONFIG_MQTT_TRANSPORT_WEBSOCKET_SECURE=y
+
+# MDB Cashless Device defaults
+CONFIG_CASHLESS_ADDR_1=y
+CONFIG_CASHLESS_DEVICE_ADDRESS=16
+CONFIG_MDB_SCALE_FACTOR=1
+CONFIG_MDB_DECIMAL_PLACES=2
+
+# MQTT Broker defaults
+CONFIG_MQTT_BROKER_URI="mqtt://mqtt.panamavendingmachines.com"
+CONFIG_MQTT_USERNAME="vmflow"
+CONFIG_MQTT_PASSWORD="vmflow"
+
+# ------------------------------------------------------------------
+# PSRAM — disabled (this board has no external PSRAM)
+# ------------------------------------------------------------------
+# CONFIG_SPIRAM=y
+
+# ------------------------------------------------------------------
+# LVGL Graphics Library
+# ------------------------------------------------------------------
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_DEF_REFR_PERIOD=33
+CONFIG_LV_USE_QRCODE=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+
+# SPI master for display
+CONFIG_SPI_MASTER_ISR_IN_IRAM=y

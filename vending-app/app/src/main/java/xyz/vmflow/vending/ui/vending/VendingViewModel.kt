@@ -63,7 +63,8 @@ sealed class VendingState {
         val itemNumber: Int,
         val qrHash: String,
         val transactionId: String,
-        val statusMessage: String = "Waiting for payment..."
+        val statusMessage: String = "Waiting for payment...",
+        val mdbSessionTimedOut: Boolean = false
     ) : VendingState()
 
     /** Payment approved. Waiting for the machine to dispense the product. */
@@ -268,7 +269,19 @@ class VendingViewModel(
                 bleManager?.observeNotifications()
                     ?.catch { e ->
                         Log.e(TAG, "Notification error: ${e.message}")
-                        _state.value = VendingState.Error("Connection lost: ${e.message}")
+                        val currentState = _state.value
+                        if (currentState is VendingState.YappyPayment) {
+                            // BLE disconnected during Yappy payment — keep polling alive.
+                            // The sale will be recorded by the Edge Function and credit
+                            // pushed to ESP32 via MQTT regardless of BLE state.
+                            Log.w(TAG, "BLE connection lost during Yappy payment — keeping Yappy poll alive")
+                            _state.value = currentState.copy(
+                                statusMessage = "BLE disconnected. Waiting for Yappy payment...",
+                                mdbSessionTimedOut = true
+                            )
+                        } else {
+                            _state.value = VendingState.Error("Connection lost: ${e.message}")
+                        }
                     }
                     ?.collect { payload ->
                         handleNotification(payload)
@@ -442,12 +455,21 @@ class VendingViewModel(
         yappyPollingJob = viewModelScope.launch {
             val payload = lastVendRequestPayload ?: return@launch
             val subdomain = connectedDevice?.subdomain ?: return@launch
+            val maxPollingMs = 5 * 60 * 1000L // 5 minute timeout
+            val startTime = System.currentTimeMillis()
 
             while (true) {
                 delay(3000) // Poll every 3 seconds
 
                 val currentState = _state.value
                 if (currentState !is VendingState.YappyPayment) break
+
+                // Safety timeout: stop polling after 5 minutes
+                if (System.currentTimeMillis() - startTime > maxPollingMs) {
+                    Log.w(TAG, "Yappy polling timed out after 5 minutes")
+                    _state.value = VendingState.Error("Payment timed out. If you already paid, the credit will be applied automatically.")
+                    break
+                }
 
                 val result = yappyRepository.checkStatus(
                     transactionId = transactionId,
@@ -467,23 +489,32 @@ class VendingViewModel(
                                 // The Edge Function has:
                                 //   1. Recorded the sale with channel "yappy"
                                 //   2. Pushed credit to ESP32 via MQTT (starts new MDB session)
-                                // Try BLE write as bonus (works if MDB session is still alive).
-                                // If BLE fails, the MQTT credit push handles dispensing —
-                                // the customer just needs to re-select their product.
-                                try {
-                                    val approvalPayload = yappyRepository.decodeApprovalPayload(statusResponse)
-                                    bleManager?.writePayload(approvalPayload)
-                                    Log.d(TAG, "BLE approval written successfully")
-                                    _state.value = VendingState.Dispensing
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "BLE write failed (expected if MDB session timed out): ${e.message}")
-                                    // Sale recorded + MQTT credit pushed by server.
-                                    // Customer re-selects product on machine → auto-dispenses.
+
+                                if (currentState.mdbSessionTimedOut) {
+                                    // MDB session already ended — BLE write would succeed at
+                                    // transport level but ESP32 can't act on it. Go straight
+                                    // to Success; the MQTT credit push handles dispensing.
+                                    Log.d(TAG, "MDB session already timed out — skipping BLE write, MQTT handles dispensing")
                                     _state.value = VendingState.Success(
                                         itemNumber = currentState.itemNumber,
                                         message = "Payment Confirmed!",
                                         subtitle = "Credit sent to machine. Please select your product on the machine to dispense."
                                     )
+                                } else {
+                                    // MDB session still alive — write BLE approval directly
+                                    try {
+                                        val approvalPayload = yappyRepository.decodeApprovalPayload(statusResponse)
+                                        bleManager?.writePayload(approvalPayload)
+                                        Log.d(TAG, "BLE approval written successfully")
+                                        _state.value = VendingState.Dispensing
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "BLE write failed: ${e.message}")
+                                        _state.value = VendingState.Success(
+                                            itemNumber = currentState.itemNumber,
+                                            message = "Payment Confirmed!",
+                                            subtitle = "Credit sent to machine. Please select your product on the machine to dispense."
+                                        )
+                                    }
                                 }
                                 return@launch
                             }
@@ -628,7 +659,8 @@ class VendingViewModel(
         if (currentState is VendingState.YappyPayment) {
             Log.w(TAG, "MDB session timed out while waiting for Yappy payment — keeping Yappy poll alive")
             _state.value = currentState.copy(
-                statusMessage = "Machine timed out. Waiting for Yappy payment..."
+                statusMessage = "Machine timed out. Waiting for Yappy payment...",
+                mdbSessionTimedOut = true
             )
             // Do NOT call disconnect() — keep BLE alive and keep Yappy polling
             return

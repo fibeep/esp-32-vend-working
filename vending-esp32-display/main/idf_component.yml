@@ -1,0 +1,15 @@
+dependencies:
+  espressif/mqtt:
+    version: "*"
+  espressif/led_strip:
+    version: "*"
+  espressif/cjson:
+    version: "*"
+  atanisoft/esp_lcd_ili9488:
+    version: "^1.0.0"
+  lvgl/lvgl:
+    version: "~9.2"
+  espressif/esp_lvgl_port:
+    version: "^2.4"
+  idf:
+    version: ">=5.0.0"

@@ -78,7 +78,7 @@ function base64Encode(bytes: Uint8Array): string {
 // ── CORS headers ────────────────────────────────────────────────────────
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-device-key",
 };
 
 function jsonResponse(data: unknown, status = 200) {
@@ -173,7 +173,7 @@ async function handleGenerateQr(
   // Look up device passkey
   const { data: embeddedData, error: embeddedError } = await supabaseAdmin
     .from("embedded")
-    .select("passkey, id")
+    .select("passkey, id, owner_id")
     .eq("subdomain", subdomain);
 
   if (embeddedError || !embeddedData || embeddedData.length === 0) {
@@ -334,7 +334,7 @@ async function handleCheckStatus(
   // Look up device
   const { data: embeddedData, error: embeddedError } = await supabaseAdmin
     .from("embedded")
-    .select("passkey, id")
+    .select("passkey, id, owner_id")
     .eq("subdomain", subdomain);
 
   if (embeddedError || !embeddedData || embeddedData.length === 0) {
@@ -348,7 +348,8 @@ async function handleCheckStatus(
   const decoded = xorDecode(payloadBytes, passkey);
   const displayPrice = fromScaleFactor(decoded.itemPrice, SCALE_FACTOR, SCALE_DECIMALS);
 
-  // Record the sale
+  // Record the sale (resolve owner from device if ESP32 device-key auth)
+  const saleOwnerId = userId === "__device__" ? (device.owner_id ?? null) : userId;
   const { data: saleData, error: saleError } = await supabaseAdmin
     .from("sales")
     .insert([{
@@ -356,7 +357,7 @@ async function handleCheckStatus(
       item_number: decoded.itemNumber,
       item_price: displayPrice,
       channel: "yappy",
-      owner_id: userId,
+      owner_id: saleOwnerId,
       lat: lat ?? null,
       lng: lng ?? null,
       external_transaction_id: transaction_id,
@@ -460,41 +461,55 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // Manual auth verification (verify_jwt is disabled at gateway level)
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return jsonResponse({ error: "Missing or malformed Authorization header" }, 401);
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-    // Verify user JWT
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    // ── Authentication: accept Bearer JWT (web/mobile) OR x-device-key (ESP32) ──
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const deviceKey = req.headers.get("x-device-key");
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return jsonResponse({ error: "Unauthorized", details: authError?.message }, 401);
+    let userId: string;
+
+    if (deviceKey) {
+      // ESP32 device-key authentication
+      const expectedKey = Deno.env.get("ESP32_DEVICE_KEY") ?? "vmf-esp32-yappy-2024-d7f3a9b2";
+      if (deviceKey !== expectedKey) {
+        return jsonResponse({ error: "Invalid device key" }, 401);
+      }
+      // userId will be resolved from embedded table using subdomain
+      userId = "__device__";
+      console.log("[yappy] Authenticated via x-device-key (ESP32)");
+    } else if (authHeader.startsWith("Bearer ")) {
+      // User JWT authentication (web/mobile clients)
+      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        return jsonResponse({ error: "Unauthorized", details: authError?.message }, 401);
+      }
+      userId = user.id;
+      console.log(`[yappy] Authenticated via JWT: ${user.email}`);
+    } else {
+      return jsonResponse({ error: "Missing authentication (need Authorization header or x-device-key)" }, 401);
     }
 
-    // Use service role to bypass RLS
+    // Use service role to bypass RLS for all DB operations
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     // Parse request body
     const body = await req.json();
     const { action } = body;
 
-    console.log(`[yappy] Action: ${action}, User: ${user.email}`);
+    console.log(`[yappy] Action: ${action}`);
 
     switch (action) {
       case "generate-qr":
-        return await handleGenerateQr(body, supabaseAdmin, user.id);
+        return await handleGenerateQr(body, supabaseAdmin, userId);
 
       case "check-status":
-        return await handleCheckStatus(body, supabaseAdmin, user.id, authHeader);
+        return await handleCheckStatus(body, supabaseAdmin, userId, authHeader);
 
       case "cancel":
         return await handleCancel(body, supabaseAdmin);
