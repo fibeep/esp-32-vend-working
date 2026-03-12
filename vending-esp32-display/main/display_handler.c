@@ -422,18 +422,21 @@ void vTaskDisplayUpdate(void *pvParameters)
                 lv_screen_load(scr_idle);
                 break;
 
-            case YAPPY_QR_PENDING:
+            case YAPPY_QR_PENDING: {
                 /* Show payment screen with price, QR will appear later */
-                lv_label_set_text_fmt(lbl_price, "$%.2f", ys.display_price);
+                int cents = (int)(ys.display_price * 100 + 0.5f);
+                lv_label_set_text_fmt(lbl_price, "$%d.%02d", cents / 100, cents % 100);
                 lv_label_set_text_fmt(lbl_item_info, "Item #%u", ys.item_number);
                 lv_label_set_text(lbl_scan_msg, "Generating QR code...");
                 lv_screen_load(scr_payment);
                 break;
+            }
 
             case YAPPY_QR_READY:
-            case YAPPY_POLLING:
-                /* Update price and QR code */
-                lv_label_set_text_fmt(lbl_price, "$%.2f", ys.display_price);
+            case YAPPY_POLLING: {
+                /* Update price and QR code — use integer math since LVGL doesn't support %f */
+                int cents = (int)(ys.display_price * 100 + 0.5f);
+                lv_label_set_text_fmt(lbl_price, "$%d.%02d", cents / 100, cents % 100);
                 lv_label_set_text_fmt(lbl_item_info, "Item #%u", ys.item_number);
                 lv_label_set_text(lbl_scan_msg, "Scan with Yappy app to pay");
                 if (ys.qr_hash[0] != '\0' && strcmp(ys.qr_hash, prev_qr_hash) != 0) {
@@ -447,6 +450,7 @@ void vTaskDisplayUpdate(void *pvParameters)
                     lv_screen_load(scr_payment);
                 }
                 break;
+            }
 
             case YAPPY_PAID:
                 lv_screen_load(scr_success);
