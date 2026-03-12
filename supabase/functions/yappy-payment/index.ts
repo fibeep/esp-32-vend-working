@@ -173,7 +173,7 @@ async function handleGenerateQr(
   // Look up device passkey
   const { data: embeddedData, error: embeddedError } = await supabaseAdmin
     .from("embedded")
-    .select("passkey, id, owner_id")
+    .select("passkey, id, owner_id, machine_id")
     .eq("subdomain", subdomain);
 
   if (embeddedError || !embeddedData || embeddedData.length === 0) {
@@ -334,7 +334,7 @@ async function handleCheckStatus(
   // Look up device
   const { data: embeddedData, error: embeddedError } = await supabaseAdmin
     .from("embedded")
-    .select("passkey, id, owner_id")
+    .select("passkey, id, owner_id, machine_id")
     .eq("subdomain", subdomain);
 
   if (embeddedError || !embeddedData || embeddedData.length === 0) {
@@ -354,6 +354,7 @@ async function handleCheckStatus(
     .from("sales")
     .insert([{
       embedded_id: device.id,
+      machine_id: device.machine_id ?? null,
       item_number: decoded.itemNumber,
       item_price: displayPrice,
       channel: "yappy",

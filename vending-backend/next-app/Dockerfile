@@ -1,9 +1,9 @@
 # --- Stage 1: Build the Next.js application ---
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY vending-backend/next-app/package.json vending-backend/next-app/package-lock.json* ./
+COPY package.json package-lock.json* ./
 RUN npm ci
-COPY vending-backend/next-app/ .
+COPY . .
 RUN npm run build
 
 # --- Stage 3: Production runner ---

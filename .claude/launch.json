@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "next-backend",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 3000,
+      "runtimeExecutable": "/usr/local/bin/node",
+      "runtimeArgs": ["node_modules/.bin/next", "dev", "-p", "3001"],
+      "port": 3001,
       "cwd": "vending-backend/next-app"
     },
     {

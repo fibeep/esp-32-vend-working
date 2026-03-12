@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Color palette for the VMflow Vending App Material3 theme -->
+<resources>
+    <!-- Primary brand colors -->
+    <color name="vmflow_primary">#2563EB</color>
+    <color name="vmflow_on_primary">#FFFFFF</color>
+    <color name="vmflow_primary_container">#D5E3FF</color>
+    <color name="vmflow_on_primary_container">#001B3D</color>
+
+    <!-- Secondary colors -->
+    <color name="vmflow_secondary">#555F71</color>
+    <color name="vmflow_on_secondary">#FFFFFF</color>
+    <color name="vmflow_secondary_container">#D9E3F8</color>
+    <color name="vmflow_on_secondary_container">#121C2B</color>
+
+    <!-- Tertiary colors -->
+    <color name="vmflow_tertiary">#6E5676</color>
+    <color name="vmflow_on_tertiary">#FFFFFF</color>
+    <color name="vmflow_tertiary_container">#F8D8FF</color>
+    <color name="vmflow_on_tertiary_container">#28132F</color>
+
+    <!-- Status colors -->
+    <color name="status_online">#22C55E</color>
+    <color name="status_offline">#EF4444</color>
+    <color name="status_connecting">#F59E0B</color>
+
+    <!-- Background -->
+    <color name="vmflow_background">#FAFBFF</color>
+    <color name="vmflow_surface">#FAFBFF</color>
+
+    <!-- Launcher icon background -->
+    <color name="ic_launcher_background">#2563EB</color>
+</resources>

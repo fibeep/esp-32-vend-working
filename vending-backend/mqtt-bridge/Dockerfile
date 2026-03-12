@@ -1,9 +1,9 @@
 # --- Stage 1: Build the TypeScript project ---
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY vending-backend/mqtt-bridge/package.json vending-backend/mqtt-bridge/package-lock.json* ./
+COPY package.json package-lock.json* ./
 RUN npm ci
-COPY vending-backend/mqtt-bridge/ .
+COPY . .
 RUN npm run build
 
 # --- Stage 2: Production runner ---
